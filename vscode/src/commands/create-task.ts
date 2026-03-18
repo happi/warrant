@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { ApiClient } from "../core/api-client";
 
-export function registerCreateCommand(api: ApiClient): vscode.Disposable[] {
+export function registerCreateCommand(api: ApiClient | null): vscode.Disposable[] {
     return [
         vscode.commands.registerCommand("warrant.createTask", async () => {
             const title = await vscode.window.showInputBox({
@@ -28,6 +28,10 @@ export function registerCreateCommand(api: ApiClient): vscode.Disposable[] {
                 ? labelsInput.split(",").map(l => l.trim()).filter(Boolean)
                 : undefined;
 
+            if (!api) {
+                vscode.window.showWarningMessage("No server configured. Create the task file manually in .warrant/tasks/");
+                return;
+            }
             const task = await api.createTask(title, intent || undefined, labels, priorityPick || undefined);
             if (task) {
                 const action = await vscode.window.showInformationMessage(

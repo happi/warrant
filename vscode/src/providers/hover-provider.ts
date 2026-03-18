@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ApiClient } from "../core/api-client";
+import { TaskLookup } from "../core/types";
 
 /**
  * Shows a tooltip when hovering over a task ID (e.g., ZIN-42) in any file.
@@ -7,7 +7,7 @@ import { ApiClient } from "../core/api-client";
 export class TaskHoverProvider implements vscode.HoverProvider {
     private pattern: RegExp;
 
-    constructor(private api: ApiClient, prefix?: string) {
+    constructor(private api: TaskLookup, prefix?: string) {
         this.pattern = prefix
             ? new RegExp(`\\b(${prefix}-\\d+)\\b`, "i")
             : /\b([A-Z]{1,10}-\d+)\b/;

@@ -66,3 +66,10 @@ export interface LedgerConfig {
     token: string;
     prefix: string;
 }
+
+/** Common interface for anything that can look up tasks */
+export interface TaskLookup {
+    getTask(taskId: string): Promise<Task | null>;
+    listTasks(): Promise<TaskSummary[]>;
+    getTrace(taskId: string): Promise<Trace | null>;
+}

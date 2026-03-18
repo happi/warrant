@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { ApiClient } from "../core/api-client";
 import { getCurrentTaskId } from "../git/branch";
 
-export function registerStatusCommands(api: ApiClient, prefix: string): vscode.Disposable[] {
+export function registerStatusCommands(api: ApiClient | null, prefix: string): vscode.Disposable[] {
     return [
         vscode.commands.registerCommand("warrant.startTask", async () => {
             await transitionCurrentTask(api, prefix, "in_progress", "open");
@@ -17,8 +17,12 @@ export function registerStatusCommands(api: ApiClient, prefix: string): vscode.D
 }
 
 async function transitionCurrentTask(
-    api: ApiClient, prefix: string, newStatus: string, expectedStatus: string,
+    api: ApiClient | null, prefix: string, newStatus: string, expectedStatus: string,
 ): Promise<void> {
+    if (!api) {
+        vscode.window.showWarningMessage("No server configured. Edit the task file manually.");
+        return;
+    }
     const taskId = await getCurrentTaskId(prefix);
     if (!taskId) {
         vscode.window.showWarningMessage("No task ID found on current branch");

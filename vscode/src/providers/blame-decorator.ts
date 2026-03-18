@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { blameLines, BlameLine } from "../git/blame";
-import { ApiClient } from "../core/api-client";
+import { TaskLookup } from "../core/types";
 import { Cache } from "../core/cache";
 
 const BLAME_TTL = 300_000; // 5min
@@ -20,12 +20,12 @@ export class BlameDecorator implements vscode.Disposable {
     private disposables: vscode.Disposable[] = [];
     private timer: ReturnType<typeof setTimeout> | null = null;
     private cache: Cache;
-    private api: ApiClient;
+    private api: TaskLookup;
     private prefix?: string;
     /** Map line number → blame data for the active editor, used by the hover */
     private currentBlame = new Map<number, BlameLine>();
 
-    constructor(api: ApiClient, cache: Cache, prefix?: string) {
+    constructor(api: TaskLookup, cache: Cache, prefix?: string) {
         this.api = api;
         this.cache = cache;
         this.prefix = prefix;

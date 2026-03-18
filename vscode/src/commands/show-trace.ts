@@ -1,9 +1,8 @@
 import * as vscode from "vscode";
-import { ApiClient } from "../core/api-client";
+import { TaskLookup, Trace } from "../core/types";
 import { getCurrentTaskId } from "../git/branch";
-import { Trace } from "../core/types";
 
-export function registerTraceCommands(api: ApiClient, prefix: string): vscode.Disposable[] {
+export function registerTraceCommands(api: TaskLookup, prefix: string): vscode.Disposable[] {
     return [
         vscode.commands.registerCommand("warrant.showTrace", async (taskIdArg?: string) => {
             const taskId = taskIdArg || await getCurrentTaskId(prefix);
@@ -21,7 +20,7 @@ export function registerTraceCommands(api: ApiClient, prefix: string): vscode.Di
         vscode.commands.registerCommand("warrant.openTask", async (taskIdArg?: string) => {
             if (taskIdArg) return showTrace(api, taskIdArg);
 
-            const tasks = await api.listTasks({ limit: "20" });
+            const tasks = await api.listTasks();
             const pick = await vscode.window.showQuickPick(
                 tasks.map(t => ({
                     label: `${t.id}: ${t.title}`,
@@ -36,7 +35,7 @@ export function registerTraceCommands(api: ApiClient, prefix: string): vscode.Di
     ];
 }
 
-async function showTrace(api: ApiClient, taskId: string): Promise<void> {
+async function showTrace(api: TaskLookup, taskId: string): Promise<void> {
     const trace = await api.getTrace(taskId);
     if (!trace) {
         vscode.window.showErrorMessage(`Task ${taskId} not found`);

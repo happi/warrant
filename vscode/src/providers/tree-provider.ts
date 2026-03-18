@@ -1,13 +1,12 @@
 import * as vscode from "vscode";
-import { ApiClient } from "../core/api-client";
-import { Task, TaskSummary } from "../core/types";
+import { TaskLookup, Task, TaskSummary } from "../core/types";
 import { getCurrentTaskId } from "../git/branch";
 
 export class CurrentTaskProvider implements vscode.TreeDataProvider<TaskTreeItem> {
     private _onDidChange = new vscode.EventEmitter<void>();
     readonly onDidChangeTreeData = this._onDidChange.event;
 
-    constructor(private api: ApiClient, private prefix: string) {}
+    constructor(private api: TaskLookup, private prefix: string) {}
 
     refresh(): void { this._onDidChange.fire(); }
 
@@ -67,7 +66,7 @@ export class TaskListProvider implements vscode.TreeDataProvider<TaskTreeItem> {
     private _onDidChange = new vscode.EventEmitter<void>();
     readonly onDidChangeTreeData = this._onDidChange.event;
 
-    constructor(private api: ApiClient) {}
+    constructor(private api: TaskLookup) {}
 
     refresh(): void { this._onDidChange.fire(); }
 
@@ -76,7 +75,7 @@ export class TaskListProvider implements vscode.TreeDataProvider<TaskTreeItem> {
     async getChildren(element?: TaskTreeItem): Promise<TaskTreeItem[]> {
         if (element) return element.children ?? [];
 
-        const tasks = await this.api.listTasks({ limit: "50" });
+        const tasks = await this.api.listTasks();
         if (tasks.length === 0) {
             return [new TaskTreeItem("No tasks found", "", "info")];
         }

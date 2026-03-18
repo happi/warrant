@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { ApiClient } from "../core/api-client";
 import { getCurrentTaskId, getHeadSha, getCurrentBranch } from "../git/branch";
 
-export function registerLinkCommands(api: ApiClient, prefix: string): vscode.Disposable[] {
+export function registerLinkCommands(api: ApiClient | null, prefix: string): vscode.Disposable[] {
     return [
         vscode.commands.registerCommand("warrant.linkCommit", async () => {
             const taskId = await getCurrentTaskId(prefix);
@@ -17,6 +17,10 @@ export function registerLinkCommands(api: ApiClient, prefix: string): vscode.Dis
                 return;
             }
 
+            if (!api) {
+                vscode.window.showWarningMessage("No server configured. Commit links are tracked via git history.");
+                return;
+            }
             const ok = await api.linkCommit(taskId, sha);
             if (ok) {
                 vscode.window.showInformationMessage(`Linked ${sha.slice(0, 8)} → ${taskId}`);

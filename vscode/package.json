@@ -9,8 +9,9 @@
   },
   "categories": ["Other"],
   "activationEvents": [
+    "workspaceContains:.warrant/config.yaml",
+    "workspaceContains:.warrant/tasks",
     "workspaceContains:.warrant/.env",
-    "workspaceContains:.warrant.json",
     "onView:warrant.currentTask",
     "onView:warrant.tasks"
   ],

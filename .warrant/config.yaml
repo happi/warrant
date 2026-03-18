@@ -1,0 +1,15 @@
+# Warrant configuration
+# Both the CLI and VS Code extension read this file.
+
+# Task ID prefix for this project
+prefix: W
+
+# Where task files live (relative to repo root)
+tasks_dir: .warrant/tasks
+
+# Server (optional - only needed for ID allocation, CAS, leases, hash chain)
+# server:
+#   url: http://10.20.0.210:30890
+#   org: stenmans
+#   project: warrant
+#   token_env: WARRANT_TOKEN   # read token from this env var (never store tokens in config)

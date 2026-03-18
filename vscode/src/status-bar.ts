@@ -1,10 +1,10 @@
 import * as vscode from "vscode";
 import { getCurrentTaskId } from "./git/branch";
-import { ApiClient } from "./core/api-client";
+import { TaskLookup } from "./core/types";
 
 let statusBarItem: vscode.StatusBarItem;
 
-export function createStatusBar(api: ApiClient, prefix: string): vscode.StatusBarItem {
+export function createStatusBar(api: TaskLookup, prefix: string): vscode.StatusBarItem {
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     statusBarItem.command = "warrant.showTrace";
     statusBarItem.tooltip = "Click to show task trace";
@@ -12,7 +12,7 @@ export function createStatusBar(api: ApiClient, prefix: string): vscode.StatusBa
     return statusBarItem;
 }
 
-export async function refreshStatusBar(api: ApiClient, prefix: string): Promise<void> {
+export async function refreshStatusBar(api: TaskLookup, prefix: string): Promise<void> {
     const taskId = await getCurrentTaskId(prefix);
 
     if (!taskId) {
