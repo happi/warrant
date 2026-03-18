@@ -20,8 +20,9 @@ warrant task create "Fix token refresh" \
   --labels "bug,auth"
 # > Created .warrant/tasks/AUR-1.md
 
-# 3. Branch and work
-git checkout -b task/AUR-1-fix-token-refresh
+# 3. Start working (creates branch automatically)
+warrant task start AUR-1
+# > Created branch: task/AUR-1-fix-token-refresh
 # ... fix the bug ...
 git commit -m "AUR-1: fix token refresh logic"
 
@@ -176,10 +177,11 @@ Users get 401 errors after sessions longer than 1 hour.
 Retry with exponential backoff. Simpler than refresh, covers more failure modes.
 ```
 
-**2. Branch and work**
+**2. Start working**
 
 ```bash
-git checkout -b task/AUR-42-fix-token-refresh
+warrant task start AUR-42
+# > Created branch: task/AUR-42-fix-token-refresh
 # ... fix the bug ...
 git commit -m "AUR-42: add retry with exponential backoff"
 git commit -m "AUR-42: add backoff tests"

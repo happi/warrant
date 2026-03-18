@@ -233,7 +233,21 @@ cmd_task() {
 
         start)
             local id="${1:?Usage: warrant task start TASK-ID}"
-            update_frontmatter "$(task_file "$id")" "status" "in_progress"
+            local file
+            file="$(task_file "$id")"
+            if [[ ! -f "$file" ]]; then
+                echo "Task $id not found" >&2; exit 1
+            fi
+            update_frontmatter "$file" "status" "in_progress"
+
+            # Create branch from task title
+            local title
+            title=$(read_frontmatter "$file" "title" | tr -d '"')
+            local slug
+            slug=$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | head -c 40)
+            local branch="task/${id}-${slug}"
+
+            git checkout -b "$branch" 2>/dev/null && echo "Created branch: $branch" || echo "Branch $branch may already exist"
             echo "$id: open > in_progress"
             ;;
 
@@ -263,7 +277,7 @@ Commands:
   create TITLE [--intent TEXT] [--priority P] [--labels l1,l2] [--decision TEXT]
   get TASK-ID
   list [--status S] [--label L]
-  start TASK-ID          (open > in_progress)
+  start TASK-ID          (open > in_progress, creates branch)
   review TASK-ID         (in_progress > in_review)
   done TASK-ID           (in_review > done)
   block TASK-ID          (any > blocked)
