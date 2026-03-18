@@ -9,22 +9,22 @@
   },
   "categories": ["Other"],
   "activationEvents": [
-    "workspaceContains:.ledger/.env",
-    "workspaceContains:.ledger.json",
+    "workspaceContains:.warrant/.env",
+    "workspaceContains:.warrant.json",
     "onView:warrant.currentTask",
     "onView:warrant.tasks"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      { "command": "warrant.showTrace", "title": "Change Ledger: Show Trace" },
-      { "command": "warrant.startTask", "title": "Change Ledger: Start Task" },
-      { "command": "warrant.reviewTask", "title": "Change Ledger: Mark In Review" },
-      { "command": "warrant.doneTask", "title": "Change Ledger: Mark Done" },
-      { "command": "warrant.linkCommit", "title": "Change Ledger: Link Current Commit" },
-      { "command": "warrant.createTask", "title": "Change Ledger: Create Task" },
-      { "command": "warrant.openTask", "title": "Change Ledger: Open Task" },
-      { "command": "warrant.refreshTasks", "title": "Change Ledger: Refresh", "icon": "$(refresh)" }
+      { "command": "warrant.showTrace", "title": "Warrant: Show Trace" },
+      { "command": "warrant.startTask", "title": "Warrant: Start Task" },
+      { "command": "warrant.reviewTask", "title": "Warrant: Mark In Review" },
+      { "command": "warrant.doneTask", "title": "Warrant: Mark Done" },
+      { "command": "warrant.linkCommit", "title": "Warrant: Link Current Commit" },
+      { "command": "warrant.createTask", "title": "Warrant: Create Task" },
+      { "command": "warrant.openTask", "title": "Warrant: Open Task" },
+      { "command": "warrant.refreshTasks", "title": "Warrant: Refresh", "icon": "$(refresh)" }
     ],
     "viewsContainers": {
       "activitybar": [
@@ -51,7 +51,7 @@
       "properties": {
         "warrant.url": {
           "type": "string",
-          "description": "Change Ledger server URL"
+          "description": "Warrant server URL"
         },
         "warrant.org": {
           "type": "string",

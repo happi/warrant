@@ -22,7 +22,7 @@ export function resolveConfig(): LedgerConfig | null {
 
     if (workspaceRoot) {
         // Try .warrant/.env
-        const envPath = path.join(workspaceRoot, ".ledger", ".env");
+        const envPath = path.join(workspaceRoot, ".warrant", ".env");
         if (fs.existsSync(envPath)) {
             const env = parseEnvFile(envPath);
             url = url || env["WARRANT_URL"] || "";
