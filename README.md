@@ -33,22 +33,23 @@ warrant trace AUR-1
 Output:
 
 ```
-AUR-42: Fix token refresh
+AUR-1: Fix token refresh
+  Status:   done
   Intent:   Users get 401 errors after sessions longer than 1 hour
   Decision: Retry with exponential backoff. Simpler than refresh, covers more failure modes.
-  Status:   done
 
-  Branch:  task/AUR-42-fix-token-refresh
   Commits:
-    abc1234  AUR-42: fix token refresh logic
-    def5678  AUR-42: add retry backoff tests
-  PR:      #17
+    abc1234 AUR-1: fix token refresh logic
+    def5678 AUR-1: add retry backoff tests
 
-  Audit:
-    2026-03-18 10:00  erik     created
-    2026-03-18 10:05  erik     open > in_progress
-    2026-03-18 14:30  erik     in_progress > in_review
-    2026-03-18 16:00  reviewer in_review > done
+  Branches:
+    task/AUR-1-fix-token-refresh
+
+  Audit (task file history):
+    2026-03-18 16:00  reviewer  AUR-1: mark done
+    2026-03-18 14:30  erik      AUR-1: mark in_review
+    2026-03-18 10:05  erik      AUR-1: start work
+    2026-03-18 10:00  erik      AUR-1: create task
 ```
 
 Every commit traces to a task. Every task declares intent. Every change is explainable.
