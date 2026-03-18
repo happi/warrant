@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+
+# Warrant post-push hook
+# Records commits to the compliance hash chain on the server.
+# Only runs if .warrant/config.yaml has a server configured.
+#
+# Install: warrant init (or manually copy to .git/hooks/post-push)
+# Note: git does not have a native post-push hook. This is called
+# by wrapping git push via a shell alias or the warrant CLI.
+
+set -euo pipefail
+
+# Find .warrant dir
+find_warrant_dir() {
+    local dir="$PWD"
+    while [[ "$dir" != "/" ]]; do
+        if [[ -d "$dir/.warrant" ]]; then echo "$dir/.warrant"; return 0; fi
+        dir="$(dirname "$dir")"
+    done
+    return 1
+}
+
+WARRANT_DIR="$(find_warrant_dir 2>/dev/null)" || exit 0
+
+# Load config
+if [[ -f "${WARRANT_DIR}/.env" ]]; then
+    source "${WARRANT_DIR}/.env"
+fi
+
+# Need server to record
+if [[ -z "${WARRANT_URL:-}" || -z "${WARRANT_TOKEN:-}" ]]; then
+    exit 0
+fi
+
+ORG="${WARRANT_ORG:-}"
+PROJECT="${WARRANT_PROJECT:-}"
+
+if [[ -z "$ORG" || -z "$PROJECT" ]]; then
+    exit 0
+fi
+
+# Get commits since last recorded
+# Find the latest commit the server knows about
+LAST_SERVER_SHA=$(curl -s "${WARRANT_URL}/api/ledger/chain/${ORG}/${PROJECT}?limit=1&offset=0" \
+    -H "Authorization: Bearer ${WARRANT_TOKEN}" 2>/dev/null \
+    | python3 -c "
+import sys,json
+try:
+    data = json.load(sys.stdin).get('data',[])
+    # Get the last entry (highest seq)
+    if data:
+        print(data[-1]['commit_sha'])
+except: pass
+" 2>/dev/null)
+
+# Get commits to record (since last server SHA, or last 10 if unknown)
+if [[ -n "$LAST_SERVER_SHA" ]] && git rev-parse "$LAST_SERVER_SHA" >/dev/null 2>&1; then
+    RANGE="${LAST_SERVER_SHA}..HEAD"
+else
+    RANGE="HEAD~10..HEAD"
+fi
+
+# Record each commit (oldest first)
+RECORDED=0
+while IFS='|' read -r sha parent_sha timestamp author summary; do
+    [[ -z "$sha" ]] && continue
+
+    curl -s -X POST "${WARRANT_URL}/api/ledger/record" \
+        -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"org\": \"${ORG}\",
+            \"project\": \"${PROJECT}\",
+            \"commit_sha\": \"${sha}\",
+            \"parent_sha\": \"${parent_sha}\",
+            \"summary\": $(echo "$summary" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read().strip()))'),
+            \"actor\": \"${author}\",
+            \"timestamp\": \"${timestamp}\"
+        }" > /dev/null 2>&1
+
+    RECORDED=$((RECORDED + 1))
+done < <(git log --reverse --format="%H|%P|%aI|%an|%s" "$RANGE" 2>/dev/null | head -50)
+
+if [[ $RECORDED -gt 0 ]]; then
+    echo "warrant: recorded $RECORDED commit(s) to hash chain"
+fi

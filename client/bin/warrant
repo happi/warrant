@@ -398,12 +398,132 @@ EOF
     echo "  warrant task create \"First task\" --intent \"Why it matters\""
 }
 
+cmd_record() {
+    if ! has_server; then
+        echo "Error: Server required for hash chain recording. Configure server in .warrant/config.yaml" >&2
+        exit 1
+    fi
+
+    local count="${1:-10}"
+    local range="HEAD~${count}..HEAD"
+
+    echo "Recording commits to hash chain..."
+    local recorded=0
+    while IFS='|' read -r sha parent_sha timestamp author summary; do
+        [[ -z "$sha" ]] && continue
+        local result
+        result=$(curl -s -X POST "${WARRANT_URL}/api/ledger/record" \
+            -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"org\": \"${WARRANT_ORG}\",
+                \"project\": \"${WARRANT_PROJECT}\",
+                \"commit_sha\": \"${sha}\",
+                \"parent_sha\": \"${parent_sha}\",
+                \"summary\": $(echo "$summary" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read().strip()))'),
+                \"actor\": \"${author}\",
+                \"timestamp\": \"${timestamp}\"
+            }")
+        local seq
+        seq=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('seq','?'))" 2>/dev/null)
+        echo "  #${seq} ${sha:0:8} ${summary:0:60}"
+        recorded=$((recorded + 1))
+    done < <(git log --reverse --format="%H|%P|%aI|%an|%s" "$range" 2>/dev/null)
+
+    echo ""
+    echo "Recorded $recorded commit(s)"
+}
+
+cmd_verify() {
+    if ! has_server; then
+        echo "Error: Server required for verification. Configure server in .warrant/config.yaml" >&2
+        exit 1
+    fi
+
+    echo "Verifying hash chain for ${WARRANT_ORG}/${WARRANT_PROJECT}..."
+    echo ""
+
+    # 1. Check server chain integrity
+    local server_result
+    server_result=$(curl -s "${WARRANT_URL}/api/ledger/verify/${WARRANT_ORG}/${WARRANT_PROJECT}" \
+        -H "Authorization: Bearer ${WARRANT_TOKEN}")
+    local valid length
+    valid=$(echo "$server_result" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['valid'])" 2>/dev/null)
+    length=$(echo "$server_result" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['length'])" 2>/dev/null)
+
+    if [[ "$valid" == "True" ]]; then
+        echo "Server chain: VALID ($length entries)"
+    else
+        local break_at
+        break_at=$(echo "$server_result" | python3 -c "import sys,json; print(json.load(sys.stdin)['data'].get('break_at','?'))" 2>/dev/null)
+        echo "Server chain: BROKEN at entry #$break_at"
+        exit 1
+    fi
+
+    # 2. Check that every commit in the server chain exists in git history
+    echo ""
+    echo "Checking commits against local git history..."
+    local chain
+    chain=$(curl -s "${WARRANT_URL}/api/ledger/chain/${WARRANT_ORG}/${WARRANT_PROJECT}" \
+        -H "Authorization: Bearer ${WARRANT_TOKEN}")
+
+    local missing=0 found=0 rewritten=0
+    echo "$chain" | python3 -c "
+import sys, json
+for entry in json.load(sys.stdin).get('data', []):
+    print(entry['commit_sha'] + '|' + entry.get('summary',''))
+" 2>/dev/null | while IFS='|' read -r sha summary; do
+        if git rev-parse --verify "$sha" >/dev/null 2>&1; then
+            # Commit exists. Check that the message matches.
+            local actual_summary
+            actual_summary=$(git log --format="%s" -1 "$sha" 2>/dev/null)
+            if [[ "$actual_summary" != "$summary" ]]; then
+                echo "  MISMATCH ${sha:0:8}: server=\"$summary\" git=\"$actual_summary\""
+                rewritten=$((rewritten + 1))
+            else
+                found=$((found + 1))
+            fi
+        else
+            echo "  MISSING  ${sha:0:8}: $summary"
+            echo "           This commit was recorded but is not in git history."
+            echo "           Possible force-push or rebase after recording."
+            missing=$((missing + 1))
+        fi
+    done
+
+    echo ""
+
+    # 3. Check for unrecorded commits (in git but not in server chain)
+    echo "Checking for unrecorded commits..."
+    local all_shas
+    all_shas=$(echo "$chain" | python3 -c "
+import sys, json
+for e in json.load(sys.stdin).get('data',[]): print(e['commit_sha'])
+" 2>/dev/null)
+
+    local unrecorded=0
+    git log --format="%H" HEAD~50..HEAD 2>/dev/null | while read -r sha; do
+        if ! echo "$all_shas" | grep -q "$sha"; then
+            local summary
+            summary=$(git log --format="%s" -1 "$sha")
+            echo "  UNRECORDED ${sha:0:8}: $summary"
+            unrecorded=$((unrecorded + 1))
+        fi
+    done
+
+    echo ""
+    echo "Verification complete."
+    echo "  Run 'warrant record' to record any missing commits."
+}
+
 # Main dispatch
 case "${1:-help}" in
-    task)   shift; cmd_task "$@" ;;
-    trace)  shift; cmd_trace "$@" ;;
-    lease)  shift; cmd_lease "$@" ;;
-    init)   shift; cmd_init "$@" ;;
+    task)    shift; cmd_task "$@" ;;
+    trace)   shift; cmd_trace "$@" ;;
+    lease)   shift; cmd_lease "$@" ;;
+    record)  shift; cmd_record "$@" ;;
+    verify)  shift; cmd_verify "$@" ;;
+    init)    shift; cmd_init "$@" ;;
     help|--help|-h)
         cat <<HELP
 Warrant CLI - every change needs a warrant.
@@ -415,13 +535,16 @@ Commands:
   task             Create, view, list, and transition tasks
   trace            Show full traceability for a task
   lease            Acquire or release a task lease (requires server)
+  record [N]       Record last N commits to compliance hash chain (default: 10)
+  verify           Verify repo integrity against server hash chain
 
 Examples:
   warrant init
   warrant task create "Fix login bug" --intent "Users can't log in" --priority high
-  warrant task list
   warrant task start W-1
   warrant trace W-1
+  warrant record          # record recent commits to hash chain
+  warrant verify          # check repo matches server chain
 HELP
         ;;
     *)

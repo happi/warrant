@@ -12,6 +12,7 @@ Warrant restores that link.
 ```bash
 # 1. Initialize warrant in your repo
 warrant init AUR
+# > Creates .warrant/ directory, sets task prefix to AUR
 
 # 2. Create a task
 warrant task create "Fix token refresh" \
@@ -82,7 +83,7 @@ Warrant is a **model**:
 This repo contains:
 - A **CLI** for creating tasks, tracing changes, and coordinating agents
 - **Conventions** for branches, commits, and task files
-- A **reference server** for ID allocation, concurrency control, and compliance
+- An **optional server** for coordination and notarization
 
 You don't need all of it. The model works with just task files and commit conventions.
 
