@@ -1,9 +1,0 @@
-id: W-4
-title: Update CLI to read .warrant/tasks/*.yaml
-intent: The warrant CLI must work with the new YAML task format and .warrant/ directory
-decision: Read YAML frontmatter-less files, list/trace from local repo, server only for CAS and leases
-status: open
-priority: high
-labels: [client, cli]
-created_by: erik
-created_at: 2026-03-18T19:00:00Z

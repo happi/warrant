@@ -12,12 +12,22 @@ Warrant restores that link.
 ```bash
 # 1. Create a task
 mkdir -p .warrant/tasks
-cat > .warrant/tasks/ZIN-42.yaml << 'EOF'
+cat > .warrant/tasks/ZIN-42.md << 'EOF'
+---
 id: ZIN-42
 title: Fix token refresh
-intent: Users get 401 errors after sessions longer than 1 hour
-decision: Retry with exponential backoff — simpler than refresh, covers more failure modes
 status: open
+priority: high
+labels: [bug, auth]
+---
+
+## Intent
+
+Users get 401 errors after sessions longer than 1 hour.
+
+## Decision
+
+Retry with exponential backoff — simpler than token refresh, covers more failure modes.
 EOF
 
 # 2. Branch
@@ -92,24 +102,39 @@ You don't need all of it. The model works with just task files and commit conven
 ```
 .warrant/
   tasks/
-    ZIN-42.yaml       # Every task: id, intent, decision, status
-    ZIN-43.yaml
+    ZIN-42.md          # Every task: frontmatter + intent + decision
+    ZIN-43.md
   decisions/           # Architecture decisions (optional)
   policies/            # Team policies (optional)
 ```
 
 A real task file:
 
-```yaml
+```markdown
+---
 id: ZIN-42
 title: Fix token refresh
-intent: Users get 401 errors after sessions longer than 1 hour
-decision: Retry with exponential backoff — simpler than refresh, covers more failure modes
 status: done
 priority: high
 labels: [bug, auth]
 created_by: erik
 created_at: 2026-03-18T10:00:00Z
+---
+
+## Intent
+
+Users get 401 errors after sessions longer than 1 hour.
+
+## Decision
+
+Retry with exponential backoff — simpler than token refresh,
+covers more failure modes.
+
+## Notes
+
+Considered refresh-before-expiry but that requires tracking token
+lifetime per provider. Backoff is stateless and handles network
+failures too.
 ```
 
 Git history on this file *is* the audit trail. No external database needed.
@@ -144,13 +169,22 @@ The repository remains the source of truth. Always.
 
 **1. Create the warrant**
 
-```yaml
-# .warrant/tasks/ZIN-42.yaml
+```markdown
+# .warrant/tasks/ZIN-42.md
+---
 id: ZIN-42
 title: Fix token refresh
-intent: Users get 401 errors after sessions longer than 1 hour
-decision: Retry with exponential backoff — simpler than refresh, covers more failure modes
 status: open
+priority: high
+---
+
+## Intent
+
+Users get 401 errors after sessions longer than 1 hour.
+
+## Decision
+
+Retry with exponential backoff — simpler than refresh, covers more failure modes.
 ```
 
 **2. Branch and work**
