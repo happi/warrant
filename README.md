@@ -10,34 +10,23 @@ Warrant restores that link.
 ## Try it (60 seconds)
 
 ```bash
-# 1. Create a task
-mkdir -p .warrant/tasks
-cat > .warrant/tasks/AUR-42.md << 'EOF'
----
-id: AUR-42
-title: Fix token refresh
-status: open
-priority: high
-labels: [bug, auth]
----
+# 1. Initialize warrant in your repo
+warrant init AUR
 
-## Intent
+# 2. Create a task
+warrant task create "Fix token refresh" \
+  --intent "Users get 401 errors after sessions longer than 1 hour" \
+  --priority high \
+  --labels "bug,auth"
+# > Created .warrant/tasks/AUR-1.md
 
-Users get 401 errors after sessions longer than 1 hour.
-
-## Decision
-
-Retry with exponential backoff. Simpler than token refresh, covers more failure modes.
-EOF
-
-# 2. Branch
-git checkout -b task/AUR-42-fix-token-refresh
-
-# 3. Commit
-git commit -m "AUR-42: fix token refresh logic"
+# 3. Branch and work
+git checkout -b task/AUR-1-fix-token-refresh
+# ... fix the bug ...
+git commit -m "AUR-1: fix token refresh logic"
 
 # 4. Trace
-warrant trace AUR-42
+warrant trace AUR-1
 ```
 
 Output:
@@ -265,14 +254,7 @@ export PATH="$PWD/warrant/client/bin:$PATH"
 
 # Set up a project
 cd your-project
-mkdir -p .warrant/tasks
-cat > .warrant/.env << 'EOF'
-WARRANT_URL=https://your-server.example.com
-WARRANT_ORG=your-org
-WARRANT_PROJECT=your-project
-WARRANT_TOKEN=your-token
-WARRANT_PREFIX=PRJ
-EOF
+warrant init PRJ
 
 # Install git hooks (enforces task IDs in commit messages)
 install-hooks

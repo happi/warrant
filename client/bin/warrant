@@ -1,46 +1,145 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Warrant CLI wrapper
-# Usage: ledger <command> [args]
+# Warrant CLI
+# Local-first: reads/writes .warrant/tasks/*.md files in your repo.
+# Server optional: only needed for ID allocation, CAS, and leases.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Load config from .env if not already set
-if [[ -z "${WARRANT_URL:-}" ]]; then
-    if [[ -f "$SCRIPT_DIR/../.env" ]]; then
-        source "$SCRIPT_DIR/../.env"
-    elif [[ -f ".env" ]]; then
-        source ".env"
+# Find the repo root and .warrant directory
+find_warrant_dir() {
+    local dir="$PWD"
+    while [[ "$dir" != "/" ]]; do
+        if [[ -d "$dir/.warrant/tasks" ]]; then
+            echo "$dir/.warrant"
+            return 0
+        fi
+        dir="$(dirname "$dir")"
+    done
+    echo ""
+    return 1
+}
+
+WARRANT_DIR="$(find_warrant_dir)" || true
+TASKS_DIR="${WARRANT_DIR:+$WARRANT_DIR/tasks}"
+
+# Load config
+load_config() {
+    # From .warrant/config.yaml
+    if [[ -f "${WARRANT_DIR}/config.yaml" ]]; then
+        WARRANT_PREFIX=$(grep "^prefix:" "${WARRANT_DIR}/config.yaml" | sed 's/prefix: *//' | tr -d "'\"")
     fi
-fi
 
-: "${WARRANT_URL:?Set WARRANT_URL in .env or environment}"
-: "${WARRANT_ORG:?Set WARRANT_ORG in .env or environment}"
-: "${WARRANT_PROJECT:?Set WARRANT_PROJECT in .env or environment}"
-: "${WARRANT_TOKEN:?Set WARRANT_TOKEN in .env or environment}"
+    # From .warrant/.env (overrides, has token)
+    if [[ -f "${WARRANT_DIR}/.env" ]]; then
+        source "${WARRANT_DIR}/.env"
+    fi
 
-BASE="${WARRANT_URL}/api/v1/orgs/${WARRANT_ORG}/projects/${WARRANT_PROJECT}"
+    # Fallback to script dir .env
+    if [[ -z "${WARRANT_URL:-}" && -f "$SCRIPT_DIR/../.env" ]]; then
+        source "$SCRIPT_DIR/../.env"
+    fi
+
+    WARRANT_PREFIX="${WARRANT_PREFIX:-}"
+}
+
+load_config
+
+# Server API (optional)
+has_server() {
+    [[ -n "${WARRANT_URL:-}" && -n "${WARRANT_TOKEN:-}" ]]
+}
 
 api() {
     local method="$1" path="$2"
     shift 2
-    curl -s -X "$method" "${BASE}${path}" \
+    if ! has_server; then
+        echo '{"error":"No server configured"}' >&2
+        return 1
+    fi
+    local base="${WARRANT_URL}/api/v1/orgs/${WARRANT_ORG}/projects/${WARRANT_PROJECT}"
+    curl -s -X "$method" "${base}${path}" \
         -H "Authorization: Bearer ${WARRANT_TOKEN}" \
         -H "Content-Type: application/json" \
         -H "X-Actor: $(whoami)" \
         "$@"
 }
 
-api_raw() {
-    local method="$1" url="$2"
-    shift 2
-    curl -s -X "$method" "$url" \
-        -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+api_id() {
+    if ! has_server; then
+        echo "Error: Server required for ID allocation. Set WARRANT_URL in .warrant/.env" >&2
+        exit 1
+    fi
+    curl -s -X POST "${WARRANT_URL}/api/id/next" \
         -H "Content-Type: application/json" \
-        -H "X-Actor: $(whoami)" \
-        "$@"
+        -d "{\"prefix\":\"${WARRANT_PREFIX}\"}"
 }
+
+# Local task file operations
+task_file() {
+    local id="$1"
+    echo "${TASKS_DIR}/${id}.md"
+}
+
+read_frontmatter() {
+    local file="$1" key="$2"
+    if [[ ! -f "$file" ]]; then return 1; fi
+    sed -n '/^---$/,/^---$/p' "$file" | grep "^${key}:" | sed "s/^${key}: *//" | tr -d "'\""
+}
+
+read_section() {
+    local file="$1" heading="$2"
+    if [[ ! -f "$file" ]]; then return 1; fi
+    sed -n "/^## ${heading}$/,/^## /p" "$file" | sed '1d;$d' | sed '/^$/d' | head -5
+}
+
+write_task_file() {
+    local id="$1" title="$2" intent="$3" priority="$4" labels="$5" decision="$6"
+    local file
+    file="$(task_file "$id")"
+    local now
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    local labels_yaml="[]"
+    if [[ -n "$labels" ]]; then
+        labels_yaml="[$(echo "$labels" | sed 's/,/, /g')]"
+    fi
+
+    cat > "$file" << EOF
+---
+id: ${id}
+title: "${title}"
+status: open
+priority: ${priority:-medium}
+labels: ${labels_yaml}
+created_by: $(whoami)
+created_at: '${now}'
+---
+
+## Intent
+
+${intent:-No intent specified.}
+EOF
+
+    if [[ -n "$decision" ]]; then
+        cat >> "$file" << EOF
+
+## Decision
+
+${decision}
+EOF
+    fi
+}
+
+update_frontmatter() {
+    local file="$1" key="$2" value="$3"
+    if [[ ! -f "$file" ]]; then return 1; fi
+    if grep -q "^${key}:" "$file"; then
+        sed -i "s/^${key}:.*/${key}: ${value}/" "$file"
+    fi
+}
+
+# Commands
 
 cmd_task() {
     local subcmd="${1:-help}"
@@ -48,91 +147,112 @@ cmd_task() {
 
     case "$subcmd" in
         create)
-            local title="${1:?Usage: warrant task create TITLE [--intent TEXT] [--priority low|medium|high|critical] [--labels l1,l2]}"
+            local title="${1:?Usage: warrant task create TITLE [--intent TEXT] [--priority P] [--labels l1,l2] [--decision TEXT]}"
             shift
-            local intent="" priority="" labels=""
+            local intent="" priority="" labels="" decision=""
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --intent) intent="$2"; shift 2 ;;
                     --priority) priority="$2"; shift 2 ;;
                     --labels) labels="$2"; shift 2 ;;
+                    --decision) decision="$2"; shift 2 ;;
                     *) echo "Unknown option: $1" >&2; exit 1 ;;
                 esac
             done
-            local json
-            json=$(jq -n \
-                --arg title "$title" \
-                --arg intent "$intent" \
-                --arg priority "$priority" \
-                --arg labels "$labels" \
-                '{title: $title}
-                 + (if $intent != "" then {intent: $intent} else {} end)
-                 + (if $priority != "" then {priority: $priority} else {} end)
-                 + (if $labels != "" then {labels: ($labels | split(","))} else {} end)')
-            local result
-            result=$(api POST /tasks -d "$json")
-            local task_id
-            task_id=$(echo "$result" | jq -r '.data.id // empty')
-            if [[ -n "$task_id" ]]; then
-                echo "Created task $task_id"
-                echo "$result" | jq '.data'
-            else
-                echo "Error:" >&2
-                echo "$result" | jq '.' >&2
+
+            if [[ -z "$TASKS_DIR" ]]; then
+                echo "Error: No .warrant/tasks/ directory found. Run: mkdir -p .warrant/tasks" >&2
                 exit 1
             fi
+
+            # Allocate ID from server if available, otherwise use local counter
+            local task_id
+            if has_server; then
+                task_id=$(api_id | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+            else
+                # Local fallback: find highest existing number and increment
+                local max=0
+                for f in "${TASKS_DIR}"/*.md; do
+                    [[ -f "$f" ]] || continue
+                    local num
+                    num=$(basename "$f" .md | grep -oE '[0-9]+$' || echo 0)
+                    if [[ "$num" -gt "$max" ]]; then max="$num"; fi
+                done
+                local next=$((max + 1))
+                local prefix="${WARRANT_PREFIX:-W}"
+                task_id="${prefix}-${next}"
+            fi
+
+            write_task_file "$task_id" "$title" "$intent" "$priority" "$labels" "$decision"
+            echo "Created $(task_file "$task_id")"
+            echo ""
+            echo "  $task_id: $title"
+            echo ""
+            echo "Next:"
+            echo "  git checkout -b task/${task_id}-$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | head -c 40)"
             ;;
 
         get|view)
             local id="${1:?Usage: warrant task get TASK-ID}"
-            api GET "/tasks/$id" | jq '.data'
+            local file
+            file="$(task_file "$id")"
+            if [[ ! -f "$file" ]]; then
+                echo "Task $id not found" >&2; exit 1
+            fi
+            cat "$file"
             ;;
 
         list)
-            local args=""
+            if [[ -z "$TASKS_DIR" ]]; then
+                echo "No .warrant/tasks/ directory found" >&2; exit 1
+            fi
+            local filter_status="" filter_label=""
             while [[ $# -gt 0 ]]; do
                 case "$1" in
-                    --status) args="${args}&status=$2"; shift 2 ;;
-                    --assigned) args="${args}&assigned_to=$2"; shift 2 ;;
-                    --label) args="${args}&label=$2"; shift 2 ;;
+                    --status) filter_status="$2"; shift 2 ;;
+                    --label) filter_label="$2"; shift 2 ;;
                     *) shift ;;
                 esac
             done
-            args="${args#&}"
-            api GET "/tasks?${args}" | jq '.data[] | "\(.id)\t\(.status)\t\(.title)"' -r
+
+            for f in "${TASKS_DIR}"/*.md; do
+                [[ -f "$f" ]] || continue
+                local id title status priority
+                id=$(read_frontmatter "$f" "id")
+                title=$(read_frontmatter "$f" "title" | tr -d '"')
+                status=$(read_frontmatter "$f" "status")
+                priority=$(read_frontmatter "$f" "priority")
+
+                # Apply filters
+                if [[ -n "$filter_status" && "$status" != "$filter_status" ]]; then continue; fi
+                if [[ -n "$filter_label" ]] && ! grep -q "$filter_label" "$f"; then continue; fi
+
+                printf "%-8s %-14s %-8s %s\n" "$id" "$status" "$priority" "$title"
+            done
             ;;
 
         start)
             local id="${1:?Usage: warrant task start TASK-ID}"
-            api POST "/tasks/$id/status" \
-                -d '{"status":"in_progress","expected_status":"open"}' | jq '.data'
+            update_frontmatter "$(task_file "$id")" "status" "in_progress"
+            echo "$id: open > in_progress"
             ;;
 
         review)
             local id="${1:?Usage: warrant task review TASK-ID}"
-            api POST "/tasks/$id/status" \
-                -d '{"status":"in_review","expected_status":"in_progress"}' | jq '.data'
+            update_frontmatter "$(task_file "$id")" "status" "in_review"
+            echo "$id: in_progress > in_review"
             ;;
 
         done)
             local id="${1:?Usage: warrant task done TASK-ID}"
-            api POST "/tasks/$id/status" \
-                -d '{"status":"done","expected_status":"in_review"}' | jq '.data'
+            update_frontmatter "$(task_file "$id")" "status" "done"
+            echo "$id: > done"
             ;;
 
         block)
             local id="${1:?Usage: warrant task block TASK-ID}"
-            local current
-            current=$(api GET "/tasks/$id" | jq -r '.data.status')
-            api POST "/tasks/$id/status" \
-                -d "{\"status\":\"blocked\",\"expected_status\":\"$current\"}" | jq '.data'
-            ;;
-
-        assign)
-            local id="${1:?Usage: warrant task assign TASK-ID ASSIGNEE}"
-            local assignee="${2:?Usage: warrant task assign TASK-ID ASSIGNEE}"
-            api PATCH "/tasks/$id" \
-                -d "{\"assigned_to\":\"$assignee\"}" | jq '.data'
+            update_frontmatter "$(task_file "$id")" "status" "blocked"
+            echo "$id: > blocked"
             ;;
 
         help|*)
@@ -140,55 +260,65 @@ cmd_task() {
 Usage: warrant task <command> [args]
 
 Commands:
-  create TITLE [--intent TEXT] [--priority P] [--labels l1,l2]
+  create TITLE [--intent TEXT] [--priority P] [--labels l1,l2] [--decision TEXT]
   get TASK-ID
-  list [--status S] [--assigned USER] [--label L]
-  start TASK-ID          (open → in_progress)
-  review TASK-ID         (in_progress → in_review)
-  done TASK-ID           (in_review → done)
-  block TASK-ID          (any → blocked)
-  assign TASK-ID USER
+  list [--status S] [--label L]
+  start TASK-ID          (open > in_progress)
+  review TASK-ID         (in_progress > in_review)
+  done TASK-ID           (in_review > done)
+  block TASK-ID          (any > blocked)
 HELP
             ;;
     esac
 }
 
-cmd_link() {
-    local kind="${1:?Usage: warrant link <branch|commit|pr> TASK-ID REF [URL]}"
-    local id="${2:?Usage: warrant link $kind TASK-ID REF [URL]}"
-    local ref="${3:?Usage: warrant link $kind TASK-ID REF [URL]}"
-    local url="${4:-}"
-
-    local json
-    json=$(jq -n --arg kind "$kind" --arg ref "$ref" --arg url "$url" \
-        '{kind: $kind, ref: $ref} + (if $url != "" then {url: $url} else {} end)')
-
-    api POST "/tasks/$id/links" -d "$json" | jq '.data'
-}
-
 cmd_trace() {
     local id="${1:?Usage: warrant trace TASK-ID}"
-    local result
-    result=$(api GET "/tasks/$id/trace")
+    local file
+    file="$(task_file "$id")"
 
-    echo "$result" | jq -r '
-        .data |
-        "Task: \(.task.id) — \(.task.title)",
-        "Status: \(.task.status)",
-        "Intent: \(.task.intent // "none")",
-        "",
-        "Branches:",
-        (.links.branches[]? | "  \(if type == "string" then . else .ref end)"),
-        "",
-        "Commits:",
-        (.links.commits[]? | "  \(if type == "string" then . else "\(.ref) \(.url // "")" end)"),
-        "",
-        "PRs:",
-        (.links.prs[]? | "  \(if type == "string" then . else "#\(.ref) \(.url // "")" end)"),
-        "",
-        "Audit:",
-        (.audit[]? | "  \(.timestamp) \(.actor) \(.event_type) \(.detail // "" | tostring)")
-    '
+    if [[ ! -f "$file" ]]; then
+        echo "Task $id not found" >&2; exit 1
+    fi
+
+    local title status intent decision
+    title=$(read_frontmatter "$file" "title" | tr -d '"')
+    status=$(read_frontmatter "$file" "status")
+    intent=$(read_section "$file" "Intent")
+    decision=$(read_section "$file" "Decision")
+
+    echo "$id: $title"
+    echo "  Status:   $status"
+    if [[ -n "$intent" ]]; then
+        echo "  Intent:   $intent"
+    fi
+    if [[ -n "$decision" ]]; then
+        echo "  Decision: $decision"
+    fi
+    echo ""
+
+    # Find commits referencing this task
+    echo "  Commits:"
+    git log --all --oneline --grep="$id" 2>/dev/null | while read -r line; do
+        echo "    $line"
+    done
+
+    # Find branches
+    echo ""
+    echo "  Branches:"
+    git branch --all 2>/dev/null | grep -i "$id" | while read -r line; do
+        echo "    $line"
+    done || true
+
+    # Audit (git log on the task file)
+    echo ""
+    echo "  Audit (task file history):"
+    local repo_root
+    repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"
+    if [[ -n "$repo_root" ]]; then
+        local rel_path="${file#$repo_root/}"
+        git log --format="    %ai  %an  %s" -- "$rel_path" 2>/dev/null
+    fi
 }
 
 cmd_lease() {
@@ -196,15 +326,25 @@ cmd_lease() {
     local id="${2:?Usage: warrant lease $subcmd TASK-ID}"
     local owner="${3:-$(whoami)}"
 
+    if ! has_server; then
+        echo "Error: Leases require a server. Configure WARRANT_URL in .warrant/.env" >&2
+        exit 1
+    fi
+
     case "$subcmd" in
         acquire)
             local ttl="${4:-3600}"
-            api POST "/tasks/$id/lease" \
-                -d "{\"owner\":\"$owner\",\"ttl_seconds\":$ttl}" | jq '.data'
+            curl -s -X POST "${WARRANT_URL}/api/leases/acquire" \
+                -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "{\"org\":\"${WARRANT_ORG}\",\"project\":\"${WARRANT_PROJECT}\",\"task_id\":\"$id\",\"owner\":\"$owner\",\"ttl_seconds\":$ttl}"
+            echo ""
             ;;
         release)
-            api DELETE "/tasks/$id/lease" \
-                -d "{\"owner\":\"$owner\"}"
+            curl -s -X POST "${WARRANT_URL}/api/leases/release" \
+                -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "{\"org\":\"${WARRANT_ORG}\",\"project\":\"${WARRANT_PROJECT}\",\"task_id\":\"$id\",\"owner\":\"$owner\"}"
             echo "Lease released"
             ;;
         *)
@@ -214,49 +354,60 @@ cmd_lease() {
     esac
 }
 
-cmd_audit() {
-    local args=""
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --task) args="${args}&task_id=$2"; shift 2 ;;
-            --since) args="${args}&since=$2"; shift 2 ;;
-            --until) args="${args}&until=$2"; shift 2 ;;
-            *) shift ;;
-        esac
-    done
-    args="${args#&}"
-    api GET "/audit?${args}" | jq '.data[] | "\(.timestamp) \(.actor) \(.event_type) \(.detail // "" | tostring)"' -r
+cmd_init() {
+    mkdir -p .warrant/tasks .warrant/decisions .warrant/policies
+
+    if [[ ! -f .warrant/config.yaml ]]; then
+        local prefix="${1:-}"
+        if [[ -z "$prefix" ]]; then
+            read -rp "Task ID prefix (e.g., W, AUR, ZIN): " prefix
+        fi
+        prefix=$(echo "$prefix" | tr '[:lower:]' '[:upper:]')
+
+        cat > .warrant/config.yaml << EOF
+# Warrant configuration
+prefix: ${prefix}
+tasks_dir: .warrant/tasks
+
+# Server (optional)
+# server:
+#   url: http://localhost:8090
+#   org: myorg
+#   project: myproject
+#   token_env: WARRANT_TOKEN
+EOF
+        echo "Created .warrant/config.yaml (prefix: $prefix)"
+    fi
+
+    echo "Warrant initialized. Create your first task:"
+    echo ""
+    echo "  warrant task create \"First task\" --intent \"Why it matters\""
 }
 
 # Main dispatch
 case "${1:-help}" in
     task)   shift; cmd_task "$@" ;;
-    link)   shift; cmd_link "$@" ;;
     trace)  shift; cmd_trace "$@" ;;
     lease)  shift; cmd_lease "$@" ;;
-    audit)  shift; cmd_audit "$@" ;;
+    init)   shift; cmd_init "$@" ;;
     help|--help|-h)
         cat <<HELP
-Warrant CLI
+Warrant CLI - every change needs a warrant.
 
-Usage: ledger <command> [args]
+Usage: warrant <command> [args]
 
 Commands:
-  task     Create, view, list, and transition tasks
-  link     Link branches, commits, or PRs to tasks
-  trace    Show full traceability for a task
-  lease    Acquire or release a task lease
-  audit    View audit log
-
-Configuration:
-  Set WARRANT_URL, WARRANT_ORG, WARRANT_PROJECT, WARRANT_TOKEN
-  in .env or as environment variables.
+  init             Initialize .warrant/ in the current repo
+  task             Create, view, list, and transition tasks
+  trace            Show full traceability for a task
+  lease            Acquire or release a task lease (requires server)
 
 Examples:
+  warrant init
   warrant task create "Fix login bug" --intent "Users can't log in" --priority high
-  warrant task start FE-42
-  warrant link branch FE-42 task/FE-42-fix-login
-  warrant trace FE-42
+  warrant task list
+  warrant task start W-1
+  warrant trace W-1
 HELP
         ;;
     *)
