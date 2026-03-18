@@ -1,0 +1,9 @@
+id: W-3
+title: Switch task format from markdown to YAML
+intent: The README shows .yaml task files — dogfood the format we're teaching
+decision: Plain YAML, no frontmatter wrapping — simpler to parse, simpler to read
+status: in_progress
+priority: high
+labels: [format, dogfooding]
+created_by: erik
+created_at: 2026-03-18T19:00:00Z

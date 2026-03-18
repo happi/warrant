@@ -1,0 +1,9 @@
+id: W-5
+title: Update VS Code extension to read .warrant/tasks/*.yaml
+intent: Extension should read task data from local YAML files, not the server API
+decision: Use .warrant/ directory, parse YAML, git log for audit — works offline
+status: open
+priority: medium
+labels: [vscode, extension]
+created_by: erik
+created_at: 2026-03-18T19:00:00Z
