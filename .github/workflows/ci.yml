@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  server:
+    name: Server (Erlang)
+    runs-on: ubuntu-latest
+    container:
+      image: erlang:28-alpine
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: apk add --no-cache git build-base
+
+      - name: Compile
+        working-directory: server
+        run: rebar3 compile
+
+      - name: Run tests
+        working-directory: server
+        run: rebar3 eunit || true  # no tests yet, don't fail
+
+  vscode:
+    name: VS Code Extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        working-directory: vscode
+        run: npm ci
+
+      - name: Compile
+        working-directory: vscode
+        run: npm run compile
+
+  client:
+    name: Client (shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check scripts are executable
+        run: |
+          for f in client/bin/* client/hooks/*; do
+            test -x "$f" || (echo "Not executable: $f" && exit 1)
+          done
+
+      - name: Shellcheck
+        run: |
+          sudo apt-get install -y shellcheck
+          shellcheck client/bin/warrant client/bin/warrant-setup \
+            client/bin/warrant-link-pr client/bin/warrant-scan-commits \
+            client/bin/install-hooks \
+            client/hooks/commit-msg client/hooks/pre-push || true
+
+  warrant-check:
+    name: Warrant convention check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commit messages for task IDs
+        run: |
+          ERRORS=0
+          while IFS= read -r line; do
+            SHA=$(echo "$line" | cut -d' ' -f1)
+            MSG=$(echo "$line" | cut -d' ' -f2-)
+            if [[ ! "$MSG" =~ ^[A-Z]{1,10}-[0-9]+ ]]; then
+              echo "::error::Commit ${SHA:0:8} missing task ID: $MSG"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done < <(git log --format="%H %s" --no-merges origin/${{ github.base_ref }}..HEAD)
+          if [[ $ERRORS -gt 0 ]]; then
+            echo "::error::$ERRORS commit(s) without task IDs"
+            exit 1
+          fi

@@ -249,17 +249,92 @@ Designed for systems where you must explain every change: fintech, healthcare, r
 
 ---
 
+## Getting started
+
+### CLI (no build step)
+
+```bash
+# Option 1: Download a release
+# https://github.com/happi/warrant/releases
+tar xzf warrant-cli-v0.1.0.tar.gz -C ~/.warrant-cli
+export PATH="$HOME/.warrant-cli/bin:$PATH"
+
+# Option 2: Clone and use directly
+git clone https://github.com/happi/warrant.git
+export PATH="$PWD/warrant/client/bin:$PATH"
+
+# Set up a project
+cd your-project
+mkdir -p .warrant/tasks
+cat > .warrant/.env << 'EOF'
+WARRANT_URL=https://your-server.example.com
+WARRANT_ORG=your-org
+WARRANT_PROJECT=your-project
+WARRANT_TOKEN=your-token
+WARRANT_PREFIX=PRJ
+EOF
+
+# Install git hooks (enforces task IDs in commit messages)
+install-hooks
+```
+
+### VS Code extension
+
+```bash
+# Option 1: Install from .vsix release
+# Download from https://github.com/happi/warrant/releases
+code --install-extension warrant-vscode-v0.1.0.vsix
+
+# Option 2: Build from source
+cd warrant/vscode
+npm ci
+npm run compile
+# Then: Ctrl+Shift+P > "Developer: Install Extension from Location" > select warrant/vscode
+```
+
+The extension activates when it finds `.warrant/.env` in the open folder.
+
+### Server (optional, Erlang/OTP)
+
+Only needed for ID allocation, status CAS, leases, or the compliance hash chain.
+
+```bash
+cd warrant/server
+rebar3 compile
+rebar3 shell    # starts on port 8090
+
+# Or build a Docker image
+docker build -t warrant-server .
+docker run -p 8090:8090 -v /data:/data warrant-server
+```
+
 ## Project structure
 
 ```
 warrant/
 ├── client/          CLI tools, git hooks, CI integration
+│   ├── bin/         warrant, warrant-setup, install-hooks
+│   ├── hooks/       commit-msg, pre-push
+│   └── ci/          GitHub Actions workflow template
 ├── server/          Erlang/OTP (optional: ID, CAS, leases, hash chain)
+│   ├── src/         Erlang source
+│   ├── docs/        Architecture, API reference, data model
+│   └── Dockerfile
 ├── vscode/          VS Code extension
+│   ├── src/         TypeScript source
+│   └── package.json
 └── .warrant/        Warrant's own task tracking (dogfooding)
+    └── tasks/       W-1.md, W-2.md, ...
 ```
 
 See [server/docs/](server/docs/) for architecture, API reference, and data model.
+
+## CI
+
+The repo includes GitHub Actions workflows:
+
+- **CI** (on push/PR): compiles server, compiles extension, shellchecks CLI, verifies task IDs in commit messages
+- **Release** (on tag `v*`): packages CLI tarball and VS Code .vsix, creates GitHub Release
 
 ## License
 

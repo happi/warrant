@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build release artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Build VS Code extension
+      - name: Install extension dependencies
+        working-directory: vscode
+        run: npm ci
+
+      - name: Package extension
+        working-directory: vscode
+        run: npx @vscode/vsce package -o ../warrant-vscode-${{ github.ref_name }}.vsix
+
+      # Package CLI
+      - name: Package CLI
+        run: |
+          tar czf warrant-cli-${{ github.ref_name }}.tar.gz \
+            -C client \
+            bin/ hooks/ ci/ .env.example SETUP.md
+
+      # Create GitHub Release
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            warrant-vscode-${{ github.ref_name }}.vsix
+            warrant-cli-${{ github.ref_name }}.tar.gz
