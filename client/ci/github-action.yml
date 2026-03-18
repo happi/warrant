@@ -1,0 +1,139 @@
+# Change Ledger GitHub Actions Integration
+#
+# Copy this to .github/workflows/change-ledger.yml in your project.
+#
+# Required secrets:
+#   LEDGER_URL     - Change Ledger server URL
+#   LEDGER_ORG     - Organization slug
+#   LEDGER_PROJECT - Project slug
+#   LEDGER_TOKEN   - API token
+#   LEDGER_PREFIX  - Task ID prefix
+
+name: Change Ledger
+
+on:
+  pull_request:
+    types: [opened, synchronize, closed]
+  push:
+    branches: [main, master]
+
+jobs:
+  validate-commits:
+    name: Validate commit messages
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commit messages for task IDs
+        run: |
+          PATTERN='[A-Z]{1,10}-[0-9]+'
+          ERRORS=0
+          while IFS= read -r line; do
+            SHA=$(echo "$line" | cut -d' ' -f1)
+            MSG=$(echo "$line" | cut -d' ' -f2-)
+            if [[ ! "$MSG" =~ $PATTERN ]]; then
+              echo "::error::Commit ${SHA:0:8} missing task ID: $MSG"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done < <(git log --format="%H %s" --no-merges origin/${{ github.base_ref }}..HEAD)
+          if [[ $ERRORS -gt 0 ]]; then
+            echo "::error::$ERRORS commit(s) without task IDs"
+            exit 1
+          fi
+          echo "All commits have task IDs"
+
+  link-artifacts:
+    name: Link commits and PR
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract and link task IDs
+        env:
+          LEDGER_URL: ${{ secrets.LEDGER_URL }}
+          LEDGER_ORG: ${{ secrets.LEDGER_ORG }}
+          LEDGER_PROJECT: ${{ secrets.LEDGER_PROJECT }}
+          LEDGER_TOKEN: ${{ secrets.LEDGER_TOKEN }}
+          LEDGER_PREFIX: ${{ secrets.LEDGER_PREFIX }}
+        run: |
+          BASE="${LEDGER_URL}/api/v1/orgs/${LEDGER_ORG}/projects/${LEDGER_PROJECT}"
+          PR_NUM="${{ github.event.pull_request.number }}"
+          PR_URL="${{ github.event.pull_request.html_url }}"
+          BRANCH="${{ github.head_ref }}"
+
+          # Collect unique task IDs from commits
+          TASK_IDS=$(git log --format="%s" --no-merges origin/${{ github.base_ref }}..HEAD \
+            | grep -oE "${LEDGER_PREFIX}-[0-9]+" | sort -u)
+
+          for TASK_ID in $TASK_IDS; do
+            echo "Linking $TASK_ID..."
+
+            # Link branch
+            curl -s -X POST "${BASE}/tasks/${TASK_ID}/links" \
+              -H "Authorization: Bearer ${LEDGER_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -H "X-Actor: github-actions" \
+              -d "{\"kind\":\"branch\",\"ref\":\"${BRANCH}\"}" > /dev/null 2>&1 || true
+
+            # Link PR
+            curl -s -X POST "${BASE}/tasks/${TASK_ID}/links" \
+              -H "Authorization: Bearer ${LEDGER_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -H "X-Actor: github-actions" \
+              -d "{\"kind\":\"pr\",\"ref\":\"${PR_NUM}\",\"url\":\"${PR_URL}\"}" > /dev/null 2>&1 || true
+
+            # Link commits
+            git log --format="%H %s" --no-merges origin/${{ github.base_ref }}..HEAD \
+              | grep "${TASK_ID}" | while read -r SHA MSG; do
+              curl -s -X POST "${BASE}/tasks/${TASK_ID}/links" \
+                -H "Authorization: Bearer ${LEDGER_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -H "X-Actor: github-actions" \
+                -d "{\"kind\":\"commit\",\"ref\":\"${SHA}\"}" > /dev/null 2>&1 || true
+            done
+
+            echo "  $TASK_ID: branch, PR #${PR_NUM}, commits linked"
+          done
+
+  mark-done:
+    name: Mark tasks done on merge
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Transition tasks to done
+        env:
+          LEDGER_URL: ${{ secrets.LEDGER_URL }}
+          LEDGER_ORG: ${{ secrets.LEDGER_ORG }}
+          LEDGER_PROJECT: ${{ secrets.LEDGER_PROJECT }}
+          LEDGER_TOKEN: ${{ secrets.LEDGER_TOKEN }}
+          LEDGER_PREFIX: ${{ secrets.LEDGER_PREFIX }}
+        run: |
+          BASE="${LEDGER_URL}/api/v1/orgs/${LEDGER_ORG}/projects/${LEDGER_PROJECT}"
+
+          TASK_IDS=$(git log --format="%s" --no-merges origin/${{ github.base_ref }}..HEAD \
+            | grep -oE "${LEDGER_PREFIX}-[0-9]+" | sort -u)
+
+          for TASK_ID in $TASK_IDS; do
+            # Try in_review → done first, then in_progress → done via in_review
+            RESULT=$(curl -s -X POST "${BASE}/tasks/${TASK_ID}/status" \
+              -H "Authorization: Bearer ${LEDGER_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -H "X-Actor: github-actions" \
+              -d '{"status":"done","expected_status":"in_review"}')
+
+            if echo "$RESULT" | jq -e '.data.id' > /dev/null 2>&1; then
+              echo "$TASK_ID: marked done"
+            else
+              echo "$TASK_ID: could not auto-close ($(echo "$RESULT" | jq -r '.error.message // "unknown"'))"
+            fi
+          done

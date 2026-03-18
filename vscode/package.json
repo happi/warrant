@@ -1,0 +1,93 @@
+{
+  "name": "vscode-warrant",
+  "displayName": "Warrant",
+  "description": "Task traceability — see why code exists, linked to tasks, PRs, and intent",
+  "version": "0.1.0",
+  "publisher": "happihacking",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "workspaceContains:.ledger/.env",
+    "workspaceContains:.ledger.json",
+    "onView:warrant.currentTask",
+    "onView:warrant.tasks"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "warrant.showTrace", "title": "Change Ledger: Show Trace" },
+      { "command": "warrant.startTask", "title": "Change Ledger: Start Task" },
+      { "command": "warrant.reviewTask", "title": "Change Ledger: Mark In Review" },
+      { "command": "warrant.doneTask", "title": "Change Ledger: Mark Done" },
+      { "command": "warrant.linkCommit", "title": "Change Ledger: Link Current Commit" },
+      { "command": "warrant.createTask", "title": "Change Ledger: Create Task" },
+      { "command": "warrant.openTask", "title": "Change Ledger: Open Task" },
+      { "command": "warrant.refreshTasks", "title": "Change Ledger: Refresh", "icon": "$(refresh)" }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "warrant",
+          "title": "Warrant",
+          "icon": "$(checklist)"
+        }
+      ]
+    },
+    "views": {
+      "warrant": [
+        { "id": "warrant.currentTask", "name": "Current Task" },
+        { "id": "warrant.tasks", "name": "Tasks" }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        { "command": "warrant.refreshTasks", "when": "view == warrant.tasks", "group": "navigation" }
+      ]
+    },
+    "configuration": {
+      "title": "Warrant",
+      "properties": {
+        "warrant.url": {
+          "type": "string",
+          "description": "Change Ledger server URL"
+        },
+        "warrant.org": {
+          "type": "string",
+          "description": "Organization slug"
+        },
+        "warrant.project": {
+          "type": "string",
+          "description": "Project slug"
+        },
+        "warrant.token": {
+          "type": "string",
+          "description": "API token (prefer .ledger/.env or SecretStorage)"
+        },
+        "warrant.prefix": {
+          "type": "string",
+          "description": "Task ID prefix (e.g., ZIN, SF)"
+        },
+        "warrant.blameEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show inline task annotations from git blame"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.3.0"
+  }
+}

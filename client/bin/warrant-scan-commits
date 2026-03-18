@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Scan git commits for task IDs and link them to the Warrant.
+# Usage: ledger-scan-commits [--since REF] [--auto-link] [--dry-run]
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -z "${WARRANT_URL:-}" ]]; then
+    if [[ -f "$SCRIPT_DIR/../.env" ]]; then source "$SCRIPT_DIR/../.env"; fi
+fi
+
+: "${WARRANT_URL:?Set WARRANT_URL}"
+: "${WARRANT_ORG:?Set WARRANT_ORG}"
+: "${WARRANT_PROJECT:?Set WARRANT_PROJECT}"
+: "${WARRANT_TOKEN:?Set WARRANT_TOKEN}"
+: "${WARRANT_PREFIX:?Set WARRANT_PREFIX}"
+
+SINCE=""
+AUTO_LINK=false
+DRY_RUN=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --since) SINCE="$2"; shift 2 ;;
+        --auto-link) AUTO_LINK=true; shift ;;
+        --dry-run) DRY_RUN=true; shift ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+BASE="${WARRANT_URL}/api/v1/orgs/${WARRANT_ORG}/projects/${WARRANT_PROJECT}"
+
+# Build git log command
+GIT_ARGS=(log --format="%H %s" --no-merges)
+if [[ -n "$SINCE" ]]; then
+    GIT_ARGS+=("${SINCE}..HEAD")
+fi
+
+# Pattern to match task IDs (e.g., SF-42, BE-123)
+PATTERN="^([a-fA-F0-9]+) .*(${WARRANT_PREFIX}-[0-9]+).*"
+
+FOUND=0
+LINKED=0
+
+while IFS= read -r line; do
+    if [[ "$line" =~ $PATTERN ]]; then
+        SHA="${BASH_REMATCH[1]}"
+        TASK_ID="${BASH_REMATCH[2]}"
+        SHORT_SHA="${SHA:0:8}"
+        FOUND=$((FOUND + 1))
+
+        if [[ "$DRY_RUN" == "true" ]]; then
+            echo "[dry-run] $SHORT_SHA → $TASK_ID"
+        elif [[ "$AUTO_LINK" == "true" ]]; then
+            RESULT=$(curl -s -X POST "${BASE}/tasks/${TASK_ID}/links" \
+                -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -H "X-Actor: scan" \
+                -d "{\"kind\":\"commit\",\"ref\":\"${SHA}\"}")
+
+            if echo "$RESULT" | jq -e '.data.id' > /dev/null 2>&1; then
+                echo "Linked $SHORT_SHA → $TASK_ID"
+                LINKED=$((LINKED + 1))
+            else
+                MSG=$(echo "$RESULT" | jq -r '.error.message // "unknown"')
+                if [[ "$MSG" == *"already exists"* ]] || [[ "$MSG" == *"conflict"* ]]; then
+                    echo "Skip  $SHORT_SHA → $TASK_ID (already linked)"
+                else
+                    echo "Error $SHORT_SHA → $TASK_ID: $MSG" >&2
+                fi
+            fi
+        else
+            echo "$SHORT_SHA → $TASK_ID"
+        fi
+    fi
+done < <(git "${GIT_ARGS[@]}" 2>/dev/null)
+
+echo ""
+echo "Found: $FOUND commits with task IDs"
+if [[ "$AUTO_LINK" == "true" ]]; then
+    echo "Linked: $LINKED new"
+fi

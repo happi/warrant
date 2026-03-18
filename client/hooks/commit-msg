@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+
+# Change Ledger commit-msg hook
+# Ensures every commit message starts with a task ID: XX-NNN: description
+#
+# Valid:   "SF-42: Fix token refresh"
+# Valid:   "SF-42 Fix token refresh" (colon optional)
+# Invalid: "Fix token refresh"
+#
+# Skip with: git commit --no-verify
+
+MSG_FILE="$1"
+MSG=$(head -1 "$MSG_FILE")
+
+# Pattern: PREFIX-NUMBER at the start, where PREFIX is 1-10 uppercase letters
+PATTERN='^[A-Z]{1,10}-[0-9]+[: ]'
+
+if [[ ! "$MSG" =~ $PATTERN ]]; then
+    echo "" >&2
+    echo "ERROR: Commit message must start with a task ID." >&2
+    echo "" >&2
+    echo "  Expected: TASK-42: Your commit message" >&2
+    echo "  Got:      $MSG" >&2
+    echo "" >&2
+    echo "  Create a task first:  ledger task create \"Description\"" >&2
+    echo "  Skip this check with: git commit --no-verify" >&2
+    echo "" >&2
+    exit 1
+fi

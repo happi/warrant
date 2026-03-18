@@ -1,0 +1,12 @@
+{application, backlog_server, [
+    {description, "Change Ledger — traceability service for software systems"},
+    {vsn, "0.2.0"},
+    {registered, [backlog_srv, backlog_id_srv, ledger_db, ledger_task_srv,
+                  ledger_audit_srv, ledger_lease_reaper]},
+    {mod, {backlog_app, []}},
+    {applications, [kernel, stdlib, inets, crypto, cowboy, jsx, esqlite]},
+    {env, [
+        {port, 8090},
+        {backlog_dir, "."}
+    ]}
+]}.

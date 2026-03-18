@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Install Warrant git hooks into the current repository.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOOKS_DIR="$SCRIPT_DIR/../hooks"
+
+# Find the git repo root
+GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
+if [[ -z "$GIT_DIR" ]]; then
+    echo "Error: not inside a git repository" >&2
+    exit 1
+fi
+
+DEST="$GIT_DIR/hooks"
+mkdir -p "$DEST"
+
+install_hook() {
+    local name="$1"
+    local src="$HOOKS_DIR/$name"
+    local dst="$DEST/$name"
+
+    if [[ ! -f "$src" ]]; then
+        echo "Warning: hook source not found: $src" >&2
+        return
+    fi
+
+    if [[ -f "$dst" ]]; then
+        echo "  $name: already exists, backing up to ${name}.bak"
+        cp "$dst" "${dst}.bak"
+    fi
+
+    cp "$src" "$dst"
+    chmod +x "$dst"
+    echo "  $name: installed"
+}
+
+echo "Installing Warrant git hooks..."
+install_hook "commit-msg"
+install_hook "pre-push"
+echo ""
+echo "Done. Hooks installed to: $DEST"
+echo ""
+echo "Commit messages must now include a task ID (e.g., BE-42: Fix bug)"
+echo "Use --no-verify to bypass in exceptional cases."

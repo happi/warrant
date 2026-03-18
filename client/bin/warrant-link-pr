@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Link a PR to a task in the Warrant.
+# Usage: ledger-link-pr TASK-ID PR-NUMBER [PR-URL]
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -z "${WARRANT_URL:-}" ]]; then
+    if [[ -f "$SCRIPT_DIR/../.env" ]]; then source "$SCRIPT_DIR/../.env"; fi
+fi
+
+TASK_ID="${1:?Usage: ledger-link-pr TASK-ID PR-NUMBER [PR-URL]}"
+PR_NUMBER="${2:?Usage: ledger-link-pr TASK-ID PR-NUMBER [PR-URL]}"
+PR_URL="${3:-}"
+
+: "${WARRANT_URL:?Set WARRANT_URL}"
+: "${WARRANT_ORG:?Set WARRANT_ORG}"
+: "${WARRANT_PROJECT:?Set WARRANT_PROJECT}"
+: "${WARRANT_TOKEN:?Set WARRANT_TOKEN}"
+
+BASE="${WARRANT_URL}/api/v1/orgs/${WARRANT_ORG}/projects/${WARRANT_PROJECT}"
+
+JSON=$(jq -n --arg ref "$PR_NUMBER" --arg url "$PR_URL" \
+    '{kind: "pr", ref: $ref} + (if $url != "" then {url: $url} else {} end)')
+
+RESULT=$(curl -s -X POST "${BASE}/tasks/${TASK_ID}/links" \
+    -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -H "X-Actor: $(whoami)" \
+    -d "$JSON")
+
+if echo "$RESULT" | jq -e '.data.id' > /dev/null 2>&1; then
+    echo "Linked PR #${PR_NUMBER} to ${TASK_ID}"
+else
+    echo "Error: $(echo "$RESULT" | jq -r '.error.message // "unknown"')" >&2
+    exit 1
+fi

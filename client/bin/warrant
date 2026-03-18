@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Warrant CLI wrapper
+# Usage: ledger <command> [args]
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load config from .env if not already set
+if [[ -z "${WARRANT_URL:-}" ]]; then
+    if [[ -f "$SCRIPT_DIR/../.env" ]]; then
+        source "$SCRIPT_DIR/../.env"
+    elif [[ -f ".env" ]]; then
+        source ".env"
+    fi
+fi
+
+: "${WARRANT_URL:?Set WARRANT_URL in .env or environment}"
+: "${WARRANT_ORG:?Set WARRANT_ORG in .env or environment}"
+: "${WARRANT_PROJECT:?Set WARRANT_PROJECT in .env or environment}"
+: "${WARRANT_TOKEN:?Set WARRANT_TOKEN in .env or environment}"
+
+BASE="${WARRANT_URL}/api/v1/orgs/${WARRANT_ORG}/projects/${WARRANT_PROJECT}"
+
+api() {
+    local method="$1" path="$2"
+    shift 2
+    curl -s -X "$method" "${BASE}${path}" \
+        -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -H "X-Actor: $(whoami)" \
+        "$@"
+}
+
+api_raw() {
+    local method="$1" url="$2"
+    shift 2
+    curl -s -X "$method" "$url" \
+        -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -H "X-Actor: $(whoami)" \
+        "$@"
+}
+
+cmd_task() {
+    local subcmd="${1:-help}"
+    shift || true
+
+    case "$subcmd" in
+        create)
+            local title="${1:?Usage: warrant task create TITLE [--intent TEXT] [--priority low|medium|high|critical] [--labels l1,l2]}"
+            shift
+            local intent="" priority="" labels=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --intent) intent="$2"; shift 2 ;;
+                    --priority) priority="$2"; shift 2 ;;
+                    --labels) labels="$2"; shift 2 ;;
+                    *) echo "Unknown option: $1" >&2; exit 1 ;;
+                esac
+            done
+            local json
+            json=$(jq -n \
+                --arg title "$title" \
+                --arg intent "$intent" \
+                --arg priority "$priority" \
+                --arg labels "$labels" \
+                '{title: $title}
+                 + (if $intent != "" then {intent: $intent} else {} end)
+                 + (if $priority != "" then {priority: $priority} else {} end)
+                 + (if $labels != "" then {labels: ($labels | split(","))} else {} end)')
+            local result
+            result=$(api POST /tasks -d "$json")
+            local task_id
+            task_id=$(echo "$result" | jq -r '.data.id // empty')
+            if [[ -n "$task_id" ]]; then
+                echo "Created task $task_id"
+                echo "$result" | jq '.data'
+            else
+                echo "Error:" >&2
+                echo "$result" | jq '.' >&2
+                exit 1
+            fi
+            ;;
+
+        get|view)
+            local id="${1:?Usage: warrant task get TASK-ID}"
+            api GET "/tasks/$id" | jq '.data'
+            ;;
+
+        list)
+            local args=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --status) args="${args}&status=$2"; shift 2 ;;
+                    --assigned) args="${args}&assigned_to=$2"; shift 2 ;;
+                    --label) args="${args}&label=$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            args="${args#&}"
+            api GET "/tasks?${args}" | jq '.data[] | "\(.id)\t\(.status)\t\(.title)"' -r
+            ;;
+
+        start)
+            local id="${1:?Usage: warrant task start TASK-ID}"
+            api POST "/tasks/$id/status" \
+                -d '{"status":"in_progress","expected_status":"open"}' | jq '.data'
+            ;;
+
+        review)
+            local id="${1:?Usage: warrant task review TASK-ID}"
+            api POST "/tasks/$id/status" \
+                -d '{"status":"in_review","expected_status":"in_progress"}' | jq '.data'
+            ;;
+
+        done)
+            local id="${1:?Usage: warrant task done TASK-ID}"
+            api POST "/tasks/$id/status" \
+                -d '{"status":"done","expected_status":"in_review"}' | jq '.data'
+            ;;
+
+        block)
+            local id="${1:?Usage: warrant task block TASK-ID}"
+            local current
+            current=$(api GET "/tasks/$id" | jq -r '.data.status')
+            api POST "/tasks/$id/status" \
+                -d "{\"status\":\"blocked\",\"expected_status\":\"$current\"}" | jq '.data'
+            ;;
+
+        assign)
+            local id="${1:?Usage: warrant task assign TASK-ID ASSIGNEE}"
+            local assignee="${2:?Usage: warrant task assign TASK-ID ASSIGNEE}"
+            api PATCH "/tasks/$id" \
+                -d "{\"assigned_to\":\"$assignee\"}" | jq '.data'
+            ;;
+
+        help|*)
+            cat <<HELP
+Usage: warrant task <command> [args]
+
+Commands:
+  create TITLE [--intent TEXT] [--priority P] [--labels l1,l2]
+  get TASK-ID
+  list [--status S] [--assigned USER] [--label L]
+  start TASK-ID          (open → in_progress)
+  review TASK-ID         (in_progress → in_review)
+  done TASK-ID           (in_review → done)
+  block TASK-ID          (any → blocked)
+  assign TASK-ID USER
+HELP
+            ;;
+    esac
+}
+
+cmd_link() {
+    local kind="${1:?Usage: warrant link <branch|commit|pr> TASK-ID REF [URL]}"
+    local id="${2:?Usage: warrant link $kind TASK-ID REF [URL]}"
+    local ref="${3:?Usage: warrant link $kind TASK-ID REF [URL]}"
+    local url="${4:-}"
+
+    local json
+    json=$(jq -n --arg kind "$kind" --arg ref "$ref" --arg url "$url" \
+        '{kind: $kind, ref: $ref} + (if $url != "" then {url: $url} else {} end)')
+
+    api POST "/tasks/$id/links" -d "$json" | jq '.data'
+}
+
+cmd_trace() {
+    local id="${1:?Usage: warrant trace TASK-ID}"
+    local result
+    result=$(api GET "/tasks/$id/trace")
+
+    echo "$result" | jq -r '
+        .data |
+        "Task: \(.task.id) — \(.task.title)",
+        "Status: \(.task.status)",
+        "Intent: \(.task.intent // "none")",
+        "",
+        "Branches:",
+        (.links.branches[]? | "  \(if type == "string" then . else .ref end)"),
+        "",
+        "Commits:",
+        (.links.commits[]? | "  \(if type == "string" then . else "\(.ref) \(.url // "")" end)"),
+        "",
+        "PRs:",
+        (.links.prs[]? | "  \(if type == "string" then . else "#\(.ref) \(.url // "")" end)"),
+        "",
+        "Audit:",
+        (.audit[]? | "  \(.timestamp) \(.actor) \(.event_type) \(.detail // "" | tostring)")
+    '
+}
+
+cmd_lease() {
+    local subcmd="${1:?Usage: warrant lease <acquire|release> TASK-ID [OWNER] [TTL]}"
+    local id="${2:?Usage: warrant lease $subcmd TASK-ID}"
+    local owner="${3:-$(whoami)}"
+
+    case "$subcmd" in
+        acquire)
+            local ttl="${4:-3600}"
+            api POST "/tasks/$id/lease" \
+                -d "{\"owner\":\"$owner\",\"ttl_seconds\":$ttl}" | jq '.data'
+            ;;
+        release)
+            api DELETE "/tasks/$id/lease" \
+                -d "{\"owner\":\"$owner\"}"
+            echo "Lease released"
+            ;;
+        *)
+            echo "Usage: warrant lease <acquire|release> TASK-ID [OWNER] [TTL]" >&2
+            exit 1
+            ;;
+    esac
+}
+
+cmd_audit() {
+    local args=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --task) args="${args}&task_id=$2"; shift 2 ;;
+            --since) args="${args}&since=$2"; shift 2 ;;
+            --until) args="${args}&until=$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    args="${args#&}"
+    api GET "/audit?${args}" | jq '.data[] | "\(.timestamp) \(.actor) \(.event_type) \(.detail // "" | tostring)"' -r
+}
+
+# Main dispatch
+case "${1:-help}" in
+    task)   shift; cmd_task "$@" ;;
+    link)   shift; cmd_link "$@" ;;
+    trace)  shift; cmd_trace "$@" ;;
+    lease)  shift; cmd_lease "$@" ;;
+    audit)  shift; cmd_audit "$@" ;;
+    help|--help|-h)
+        cat <<HELP
+Warrant CLI
+
+Usage: ledger <command> [args]
+
+Commands:
+  task     Create, view, list, and transition tasks
+  link     Link branches, commits, or PRs to tasks
+  trace    Show full traceability for a task
+  lease    Acquire or release a task lease
+  audit    View audit log
+
+Configuration:
+  Set WARRANT_URL, WARRANT_ORG, WARRANT_PROJECT, WARRANT_TOKEN
+  in .env or as environment variables.
+
+Examples:
+  warrant task create "Fix login bug" --intent "Users can't log in" --priority high
+  warrant task start FE-42
+  warrant link branch FE-42 task/FE-42-fix-login
+  warrant trace FE-42
+HELP
+        ;;
+    *)
+        echo "Unknown command: $1 (try: warrant help)" >&2
+        exit 1
+        ;;
+esac
