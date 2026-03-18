@@ -280,6 +280,10 @@ install-hooks
 
 ### VS Code extension
 
+![Warrant VS Code extension](vscode_screen.png)
+
+Tasks in the sidebar, blame annotations inline, trace view with full audit trail.
+
 ```bash
 # Option 1: Install from .vsix release
 # Download from https://github.com/happi/warrant/releases
