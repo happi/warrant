@@ -1,185 +1,231 @@
 # Warrant
 
-**A system of record for why code changed.**
+**Every change needs a warrant.**
 
-*Every change needs one.*
+If you cannot answer *why* a line of code exists, the system has lost memory.
+Warrant restores that link.
 
 ---
 
+## Try it (60 seconds)
+
+```bash
+# 1. Create a task
+mkdir -p .warrant/tasks
+cat > .warrant/tasks/ZIN-42.yaml << 'EOF'
+id: ZIN-42
+title: Fix token refresh
+intent: Users get 401 errors after sessions longer than 1 hour
+decision: Retry with exponential backoff — simpler than refresh, covers more failure modes
+status: open
+EOF
+
+# 2. Branch
+git checkout -b task/ZIN-42-fix-token-refresh
+
+# 3. Commit
+git commit -m "ZIN-42: fix token refresh logic"
+
+# 4. Trace
+warrant trace ZIN-42
+```
+
+Output:
+
+```
+ZIN-42: Fix token refresh
+  Intent:   Users get 401 errors after sessions longer than 1 hour
+  Decision: Retry with exponential backoff — simpler than refresh, covers more failure modes
+  Status:   done
+
+  Branch:  task/ZIN-42-fix-token-refresh
+  Commits:
+    abc1234  ZIN-42: fix token refresh logic
+    def5678  ZIN-42: add retry backoff tests
+  PR:      #17
+
+  Audit:
+    2026-03-18 10:00  erik     created
+    2026-03-18 10:05  erik     open → in_progress
+    2026-03-18 14:30  erik     in_progress → in_review
+    2026-03-18 16:00  reviewer in_review → done
+```
+
 Every commit traces to a task. Every task declares intent. Every change is explainable.
 
+---
+
+## The Rule
+
+**Every change must have a warrant.**
+
+A warrant is:
+- A **task ID** — unique, traceable
+- An **intent** — why this change exists
+- A **trace** to code changes — branches, commits, PRs
+
+Code without a warrant is a guess that happened to compile.
+
+---
+
+## What is Warrant?
+
+Warrant is a **model**:
+
+1. Link code to intent
+2. Store intent in the repo
+3. Make the trace reconstructable
+
+### This repository
+
+This repo contains:
+- A **CLI** for creating tasks, tracing changes, and coordinating agents
+- **Conventions** for branches, commits, and task files
+- A **reference server** for ID allocation, concurrency control, and compliance
+
+You don't need all of it. The model works with just task files and commit conventions.
+
+---
+
+## Task files live in your repo
+
 ```
-code line
-  ← commit "ZIN-42: Fix token refresh"
-    ← branch task/ZIN-42-fix-token-refresh
-      ← PR #17
-        ← Task ZIN-42: "Fix auth token refresh"
-          ← Intent: "Users get 401 errors on sessions longer than 1 hour"
-          ← Decision: "Retry with backoff — simpler than token refresh, covers more failure modes"
+.warrant/
+  tasks/
+    ZIN-42.yaml       # Every task: id, intent, decision, status
+    ZIN-43.yaml
+  decisions/           # Architecture decisions (optional)
+  policies/            # Team policies (optional)
 ```
 
-## The Problem
+A real task file:
 
-Without Warrant:
+```yaml
+id: ZIN-42
+title: Fix token refresh
+intent: Users get 401 errors after sessions longer than 1 hour
+decision: Retry with exponential backoff — simpler than refresh, covers more failure modes
+status: done
+priority: high
+labels: [bug, auth]
+created_by: erik
+created_at: 2026-03-18T10:00:00Z
+```
+
+Git history on this file *is* the audit trail. No external database needed.
+
+---
+
+## Three layers of why
+
+| Layer | Question | Where it lives |
+|-------|----------|---------------|
+| **Intent** | Why does this task exist? | Task file |
+| **Decision** | Why this approach, not another? | Task file |
+| **Audit** | Who did what, when? | Git history |
+
+---
+
+## The server is optional
+
+It does not store project data.
+
+It can:
+- **Allocate IDs** — monotonic, no collisions across agents
+- **Guard status transitions** — compare-and-swap prevents race conditions
+- **Coordinate agents** — leases with TTL (crashed agents don't block work)
+- **Notarize commits** — append-only hash chain for compliance verification
+
+The repository remains the source of truth. Always.
+
+---
+
+## Example: fixing a production bug
+
+**1. Create the warrant**
+
+```yaml
+# .warrant/tasks/ZIN-42.yaml
+id: ZIN-42
+title: Fix token refresh
+intent: Users get 401 errors after sessions longer than 1 hour
+decision: Retry with exponential backoff — simpler than refresh, covers more failure modes
+status: open
+```
+
+**2. Branch and work**
+
+```bash
+git checkout -b task/ZIN-42-fix-token-refresh
+# ... fix the bug ...
+git commit -m "ZIN-42: add retry with exponential backoff"
+git commit -m "ZIN-42: add backoff tests"
+```
+
+**3. Open PR**
+
+```
+ZIN-42: Fix token refresh
+
+Intent: Users get 401 errors after sessions longer than 1 hour
+Decision: Retry with backoff instead of token refresh — simpler, covers more failure modes
+```
+
+**4. Six months later, someone reads the code**
+
+```bash
+git blame src/auth.erl
+# → commit abc1234, message "ZIN-42: add retry with exponential backoff"
+
+warrant trace ZIN-42
+# → intent, decision, all commits, PR, full history
+```
+
+The system remembers why.
+
+---
+
+## Agent coordination
+
+Multiple agents (AI coding agents, CI bots, humans) coordinate through warrants:
+
+1. **Find work** — read open tasks from repo
+2. **Claim it** — acquire a lease (atomic, TTL-based, 409 on conflict)
+3. **Do the work** — branch, commit, update task status
+4. **Hand off** — push, release lease
+
+If an agent crashes, its lease expires. No stuck tasks. No direct communication needed.
+
+---
+
+## The problem this solves
+
+Without warrants:
 - Commits drift from intent
 - PRs lack context
 - Tickets go stale in Jira
 - Audits become archaeology
 
-With Warrant:
+With warrants:
 - Every line maps to intent
 - Every change is explainable
 - Audits are queries, not investigations
 
 Designed for systems where you must explain every change — fintech, healthcare, regulated environments, and teams running AI coding agents.
 
-## How It Works
+---
 
-Task files live in your git repo as markdown with frontmatter. Git history is the audit trail. The Warrant server only handles what requires centralized coordination: ID allocation, status transitions (compare-and-swap), agent leases, and a hash ledger for compliance verification.
-
-```
-Your repo (source of truth)         Warrant server (serialization only)
-┌─────────────────────────┐         ┌──────────────────────────┐
-│ backlog/tasks/ZIN-42.md │         │ ID counter (monotonic)   │
-│ backlog/tasks/ZIN-43.md │         │ Status CAS (race guard)  │
-│ backlog/config.yml      │         │ Lease registry (TTL)     │
-│ .git/ (audit trail)     │────────▶│ Hash ledger (notary)     │
-└─────────────────────────┘  commit └──────────────────────────┘
-                              hash
-```
-
-**Conventions are simple:**
-- Branch: `task/ZIN-42-fix-token-refresh`
-- Commit: `ZIN-42: Fix token refresh logic`
-- PR body: references `ZIN-42` with intent
-
-**The server enforces:**
-- Unique, monotonic task IDs per project (no collisions)
-- Status transitions with compare-and-swap (no race conditions)
-- Leases with TTL for agent coordination (crashed agents don't block work)
-- Append-only hash chain for compliance verification
-
-## Three Layers of Why
-
-Each task captures three things:
-
-| Layer | Question | Example |
-|-------|----------|---------|
-| **Intent** | Why does this task exist? | "Users get 401 errors on sessions longer than 1 hour" |
-| **Decision** | Why this approach? | "Retry with backoff — simpler, covers more failure modes" |
-| **Audit** | Who did what, when? | Git history on the task file — every change traceable |
-
-Intent and decision live in the task file. Audit lives in git.
-
-## Trace Is the Product
-
-Everything resolves to a trace. One query answers "why does this code exist, who did it, and what was the reasoning."
-
-```bash
-warrant trace ZIN-42
-# → task + intent + decision + branches + commits + PRs + git log
-```
-
-## Agent Coordination
-
-Multiple agents (AI coding agents, CI bots, humans) coordinate through Warrant without direct communication:
-
-1. **Find work** — read open tasks from repo files
-2. **Claim it** — acquire a lease (atomic, TTL-based, 409 on conflict)
-3. **Do the work** — branch, commit, CAS the status transition
-4. **Hand off** — update task file, push, release lease
-
-If an agent crashes, its lease expires automatically. No stuck tasks.
-
-## Project Structure
+## Project structure
 
 ```
 warrant/
-├── server/          Erlang/OTP service (ID, CAS, leases, hash ledger)
 ├── client/          CLI tools, git hooks, CI integration
+├── server/          Erlang/OTP (optional — ID, CAS, leases, hash chain)
 ├── vscode/          VS Code extension
-├── backlog/         Warrant's own task tracking (dogfooding)
-└── README.md
+└── backlog/         Warrant's own task tracking (dogfooding)
 ```
 
-### Server (`server/`)
-
-Erlang/OTP + Cowboy + SQLite. Four endpoints:
-
-| Endpoint | Purpose |
-|----------|---------|
-| `POST /api/id/next` | Allocate monotonic task ID |
-| `POST /api/cas/status` | Compare-and-swap status transition |
-| `POST /api/leases/acquire` | Atomic lease with TTL |
-| `POST /api/ledger/record` | Append to compliance hash chain |
-
-### Client (`client/`)
-
-Bash CLI + git hooks:
-
-```bash
-warrant task create "Fix login bug" --intent "Users can't log in"
-warrant task start ZIN-42
-warrant link commit ZIN-42 $(git rev-parse HEAD)
-warrant trace ZIN-42
-warrant lease acquire ZIN-42 agent-4 3600
-```
-
-### VS Code Extension (`vscode/`)
-
-- Inline blame annotations with task IDs per line
-- Hover tooltips with task title, intent, and linked PRs
-- Sidebar with current task and browsable task list
-- Commands for status transitions and task creation
-- Trace webview with full history
-
-## Quick Start
-
-```bash
-# 1. Clone and set up
-git clone https://github.com/happi/warrant.git
-cp client/.env.example client/.env
-# Edit client/.env with your server URL and token
-
-# 2. Install git hooks
-client/bin/install-hooks
-
-# 3. Create your first task
-client/bin/warrant task create "My first task" --intent "Testing Warrant"
-
-# 4. Start working
-client/bin/warrant task start W-1
-git checkout -b task/W-1-my-first-task
-# ... code ...
-git commit -m "W-1: Implement the thing"
-client/bin/warrant link commit W-1 $(git rev-parse HEAD)
-client/bin/warrant task done W-1
-```
-
-## Auth
-
-- Bearer tokens for API access (agents, CI, scripts)
-- Google OAuth for human login (configurable per org)
-- Multi-tenant: organizations, projects, users
-- Superadmin orgs can create and manage other organizations
-
-## Not a Project Management Tool
-
-No sprints. No story points. No velocity. No Kanban boards. No estimation. No planning.
-
-Warrant tracks one thing: **why code changed**. Every feature exists to improve traceability or control. Nothing else ships.
-
-You can start using it in 10 minutes without changing your process.
-
-## Documentation
-
-- [SYSTEM.md](server/docs/SYSTEM.md) — what the system is and its principles
-- [ARCHITECTURE.md](server/docs/ARCHITECTURE.md) — service structure and design decisions
-- [DATA_MODEL.md](server/docs/DATA_MODEL.md) — entities, fields, relationships
-- [API.md](server/docs/API.md) — complete API reference
-- [WORKFLOW.md](server/docs/WORKFLOW.md) — task lifecycle, developer and agent flows
-- [TRACEABILITY.md](server/docs/TRACEABILITY.md) — how task-to-code mapping works
-- [SETUP.md](client/SETUP.md) — project setup guide
+See [server/docs/](server/docs/) for architecture, API reference, and data model.
 
 ## License
 
