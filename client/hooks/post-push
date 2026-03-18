@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
 # Warrant post-push hook
-# Records commits to the compliance hash chain on the server.
-# Only runs if .warrant/config.yaml has a server configured.
+# Records commits to the compliance hash chain on the server,
+# but ONLY when pushing to the protected branch (default: main).
 #
-# Install: warrant init (or manually copy to .git/hooks/post-push)
-# Note: git does not have a native post-push hook. This is called
-# by wrapping git push via a shell alias or the warrant CLI.
+# Install: install-hooks (or manually copy to .git/hooks/post-push)
+# Note: git has no native post-push hook. This is called by
+# wrapping git push or invoked manually after push.
 
 set -euo pipefail
 
@@ -34,30 +34,43 @@ fi
 
 ORG="${WARRANT_ORG:-}"
 PROJECT="${WARRANT_PROJECT:-}"
-
 if [[ -z "$ORG" || -z "$PROJECT" ]]; then
     exit 0
 fi
 
-# Get commits since last recorded
-# Find the latest commit the server knows about
-LAST_SERVER_SHA=$(curl -s "${WARRANT_URL}/api/ledger/chain/${ORG}/${PROJECT}?limit=1&offset=0" \
+# Read protected branch from config (default: main)
+PROTECTED="main"
+if [[ -f "${WARRANT_DIR}/config.yaml" ]]; then
+    CONF_BRANCH=$(grep "^protected_branch:" "${WARRANT_DIR}/config.yaml" 2>/dev/null | sed 's/protected_branch: *//' | tr -d "'\""  || true)
+    if [[ -n "$CONF_BRANCH" ]]; then
+        PROTECTED="$CONF_BRANCH"
+    fi
+fi
+
+# Check current branch
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+if [[ "$CURRENT_BRANCH" != "$PROTECTED" ]]; then
+    exit 0
+fi
+
+# Get the latest commit the server knows about for this project
+LAST_SERVER_SHA=$(curl -s "${WARRANT_URL}/api/ledger/chain/${ORG}/${PROJECT}?limit=100" \
     -H "Authorization: Bearer ${WARRANT_TOKEN}" 2>/dev/null \
     | python3 -c "
 import sys,json
 try:
     data = json.load(sys.stdin).get('data',[])
-    # Get the last entry (highest seq)
     if data:
-        print(data[-1]['commit_sha'])
+        last = max(data, key=lambda x: x['seq'])
+        print(last['commit_sha'])
 except: pass
 " 2>/dev/null)
 
-# Get commits to record (since last server SHA, or last 10 if unknown)
-if [[ -n "$LAST_SERVER_SHA" ]] && git rev-parse "$LAST_SERVER_SHA" >/dev/null 2>&1; then
+# Determine range to record
+if [[ -n "$LAST_SERVER_SHA" ]] && git rev-parse --verify "$LAST_SERVER_SHA" >/dev/null 2>&1; then
     RANGE="${LAST_SERVER_SHA}..HEAD"
 else
-    RANGE="HEAD~10..HEAD"
+    RANGE="HEAD~20..HEAD"
 fi
 
 # Record each commit (oldest first)
@@ -82,5 +95,5 @@ while IFS='|' read -r sha parent_sha timestamp author summary; do
 done < <(git log --reverse --format="%H|%P|%aI|%an|%s" "$RANGE" 2>/dev/null | head -50)
 
 if [[ $RECORDED -gt 0 ]]; then
-    echo "warrant: recorded $RECORDED commit(s) to hash chain"
+    echo "warrant: recorded $RECORDED commit(s) to hash chain (branch: $PROTECTED)"
 fi

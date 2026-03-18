@@ -7,6 +7,11 @@ prefix: W
 # Where task files live (relative to repo root)
 tasks_dir: .warrant/tasks
 
+# Branch whose merges are recorded to the compliance hash chain.
+# Only commits pushed to this branch get notarized.
+# Default: main
+protected_branch: main
+
 # Server (optional - only needed for ID allocation, CAS, leases, hash chain)
 # server:
 #   url: http://10.20.0.210:30890

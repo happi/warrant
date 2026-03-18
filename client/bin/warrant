@@ -382,8 +382,9 @@ cmd_init() {
 # Warrant configuration
 prefix: ${prefix}
 tasks_dir: .warrant/tasks
+protected_branch: main
 
-# Server (optional)
+# Server (optional - enables ID allocation, CAS, leases, hash chain)
 # server:
 #   url: http://localhost:8090
 #   org: myorg
@@ -404,10 +405,27 @@ cmd_record() {
         exit 1
     fi
 
+    # Read protected branch from config
+    local protected="main"
+    if [[ -n "$WARRANT_DIR" && -f "${WARRANT_DIR}/config.yaml" ]]; then
+        local conf_branch
+        conf_branch=$(grep "^protected_branch:" "${WARRANT_DIR}/config.yaml" 2>/dev/null | sed 's/protected_branch: *//' | tr -d "'\""  || true)
+        if [[ -n "$conf_branch" ]]; then protected="$conf_branch"; fi
+    fi
+
+    local current_branch
+    current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    if [[ "$current_branch" != "$protected" ]]; then
+        echo "You are on '$current_branch', not '$protected'." >&2
+        echo "The hash chain records commits on the protected branch ($protected)." >&2
+        read -rp "Record from '$current_branch' anyway? [y/N] " confirm
+        if [[ ! "$confirm" =~ ^[Yy] ]]; then exit 0; fi
+    fi
+
     local count="${1:-10}"
     local range="HEAD~${count}..HEAD"
 
-    echo "Recording commits to hash chain..."
+    echo "Recording commits to hash chain (branch: $current_branch)..."
     local recorded=0
     while IFS='|' read -r sha parent_sha timestamp author summary; do
         [[ -z "$sha" ]] && continue
