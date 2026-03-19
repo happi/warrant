@@ -59,7 +59,7 @@ render(home, undefined, Req) ->
     Body = warrant_html:page(<<"Warrant">>, nav_items(undefined),
         [<<"<div class=\"landing\">
 <h1>Every change needs a warrant.</h1>
-<p>Traceability for teams that ship. Task tracking, audit trails, and compliance — built into your git workflow.</p>
+<p>Traceability for teams that ship. Task tracking, audit trails, and compliance &mdash; built into your git workflow.</p>
 <div class=\"cta\">">>,
          warrant_html:button(<<"Login">>, <<"onclick=\"location='/login'\"">>),
          warrant_html:button(<<"Learn More">>, <<"onclick=\"location='https://github.com/happi/warrant'\"">>, <<"secondary">>),
@@ -187,7 +187,7 @@ render(task_detail, User, Req) ->
         {ok, Task} ->
             {ok, Trace} = ledger_task_srv:get_trace(OrgId, ProjectId, TaskId),
             Body = warrant_html:page(
-                iolist_to_binary([TaskId, <<" — ">>, maps:get(title, Task)]),
+                iolist_to_binary([TaskId, <<" - ">>, maps:get(title, Task)]),
                 nav_items(User),
                 [warrant_html:breadcrumbs([
                     {<<"/">>, <<"Home">>},
@@ -823,7 +823,7 @@ render_audit_event(#{event_type := Type, actor := Actor,
      <<"</strong> by ">>, warrant_html:h(Actor),
      case DetailText of
          <<>> -> <<>>;
-         _ -> [<<" — ">>, warrant_html:h(DetailText)]
+         _ -> [<<" - ">>, warrant_html:h(DetailText)]
      end,
      <<"</div></div>">>].
 
@@ -861,7 +861,7 @@ check_org_access(#{org_id := OrgId}, OrgSlug) ->
 
 not_found(User, Req) ->
     Body = warrant_html:page(<<"Not Found">>, nav_items(User),
-        [<<"<div class=\"section\"><h1>404 — Not Found</h1>
+        [<<"<div class=\"section\"><h1>404 &mdash; Not Found</h1>
 <p>The page you requested does not exist.</p>
 <p><a href=\"/\">Go home</a></p></div>">>]),
     warrant_html:html_reply(404, Body, Req).
