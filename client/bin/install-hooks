@@ -40,6 +40,11 @@ echo "Installing Warrant git hooks..."
 install_hook "commit-msg"
 install_hook "pre-push"
 install_hook "post-push"
+
+# Enforce --no-ff merges so every merge to main creates a warranted commit
+git config merge.ff false
+echo "  merge.ff = false: set (merges always create a merge commit)"
+
 echo ""
 echo "Done. Hooks installed to: $DEST"
 echo ""
