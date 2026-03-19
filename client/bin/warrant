@@ -1086,6 +1086,93 @@ cmd_check() {
     fi
 }
 
+cmd_blame() {
+    local target="${1:-.}"
+    local prefix="${WARRANT_PREFIX:-W}"
+    local summary_mode=false
+    local files=()
+
+    # Parse args
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --summary|-s) summary_mode=true; shift ;;
+            *) files+=("$1"); shift ;;
+        esac
+    done
+
+    if [[ ${#files[@]} -eq 0 ]]; then
+        files=("$target")
+    fi
+
+    # Collect files to blame
+    local all_files=()
+    for f in "${files[@]}"; do
+        if [[ -d "$f" ]]; then
+            while IFS= read -r path; do
+                all_files+=("$path")
+            done < <(git ls-files "$f" 2>/dev/null | grep -v '^\.' | grep -v 'node_modules' | grep -v '_build')
+        elif [[ -f "$f" ]]; then
+            all_files+=("$f")
+        fi
+    done
+
+    if [[ ${#all_files[@]} -eq 0 ]]; then
+        echo "No tracked files found." >&2
+        exit 1
+    fi
+
+    local total_lines=0 warranted_lines=0 unwarranted_lines=0
+    local -A unwarranted_commits
+
+    for file in "${all_files[@]}"; do
+        local file_total=0 file_unwarranted=0
+
+        while IFS= read -r blame_line; do
+            local sha subject
+            sha=$(echo "$blame_line" | grep -oP '^[0-9a-f]+' | head -1)
+            [[ -z "$sha" || "$sha" == "0000000000000000000000000000000000000000" ]] && continue
+
+            file_total=$((file_total + 1))
+            total_lines=$((total_lines + 1))
+
+            subject=$(git log --format="%s" -1 "$sha" 2>/dev/null)
+            if [[ "$subject" =~ [A-Z]+-[0-9]+ ]]; then
+                warranted_lines=$((warranted_lines + 1))
+            else
+                unwarranted_lines=$((unwarranted_lines + 1))
+                file_unwarranted=$((file_unwarranted + 1))
+                unwarranted_commits["${sha:0:8}"]="${subject:0:60}"
+            fi
+        done < <(git blame --porcelain "$file" 2>/dev/null | grep '^[0-9a-f]\{40\} ')
+
+        if [[ "$summary_mode" != "true" && "$file_unwarranted" -gt 0 ]]; then
+            echo "  $file: $file_unwarranted/$file_total lines unwarranted"
+        fi
+    done
+
+    # Summary
+    if [[ "$total_lines" -eq 0 ]]; then
+        echo "No lines to check."
+        exit 0
+    fi
+
+    local pct=0
+    if [[ "$total_lines" -gt 0 ]]; then
+        pct=$(( (warranted_lines * 100) / total_lines ))
+    fi
+
+    echo ""
+    echo "Warrant coverage: $warranted_lines/$total_lines lines ($pct%)"
+
+    if [[ ${#unwarranted_commits[@]} -gt 0 ]]; then
+        echo ""
+        echo "Unwarranted commits:"
+        for sha in "${!unwarranted_commits[@]}"; do
+            echo "  $sha ${unwarranted_commits[$sha]}"
+        done
+    fi
+}
+
 cmd_merge() {
     local branch="${1:-}"
 
@@ -1227,6 +1314,7 @@ case "${1:-help}" in
     merge)   shift; cmd_merge "$@" ;;
     why)     shift; cmd_why "$@" ;;
     check)   shift; cmd_check "$@" ;;
+    blame)   shift; cmd_blame "$@" ;;
     trace)   shift; cmd_trace "$@" ;;
     lease)   shift; cmd_lease "$@" ;;
     record)  shift; cmd_record "$@" ;;
@@ -1248,6 +1336,7 @@ Commands:
   merge BRANCH               Merge branch to current with --no-ff warranted commit
   why [COMMIT]               Given a commit, show why it exists
   check [RANGE]              Find commits missing a warrant reference
+  blame [FILE|DIR]           Warrant coverage per line (default: whole repo)
   trace TASK-ID              Show full traceability for a task
   board                      Open Kanban board (browser or terminal)
   lease                      Acquire or release a task lease (requires server)
@@ -1270,6 +1359,9 @@ Examples:
   warrant why abc123          # why does this commit exist?
   warrant why HEAD~3          # works with any git ref
   warrant check               # find commits without warrants
+  warrant blame               # warrant coverage for whole repo
+  warrant blame src/          # coverage for a directory
+  warrant blame -s app.erl    # summary only
   warrant trace W-1
   warrant board
   warrant record              # record recent commits to hash chain
