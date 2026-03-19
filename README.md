@@ -1,16 +1,16 @@
 # Warrant
 
-**No code reaches main without an explanation.**
+No code reaches main without an explanation.
 
-A warrant is a verifiable decision object that binds *why* a change was made to *what* actually landed. It connects intent to code, through merge, with an audit trail.
+A warrant is a verifiable decision object. It binds the reason a change was made to the code that landed. Intent, code, authorization, and audit trail in one place.
 
 ```
 Intent (task, issue, decision)
-   ↓
+   |
 Code (branch, commits, PR)
-   ↓
-Warrant (created at merge — binds intent + code + authorization)
-   ↓
+   |
+Warrant (created at merge, binds intent + code + authorization)
+   |
 Main (every commit traceable to a warrant)
 ```
 
@@ -18,9 +18,9 @@ Main (every commit traceable to a warrant)
 
 ## Three problems, one model
 
-### 1. Developers: "Why does this code look like this?"
+### 1. Developers: why does this code look like this?
 
-Six months from now, someone reads a function and asks *why*. The commit message says what changed. The PR is closed. The Jira ticket is archived or deleted.
+Six months from now, someone reads a function and asks why. The commit message says what changed. The PR is closed. The Jira ticket is archived or deleted.
 
 With warrants, the answer is in the repo:
 
@@ -34,7 +34,8 @@ warrant trace AUR-42
 ```
 AUR-42: Fix token refresh
   Intent:   Users get 401 errors after sessions longer than 1 hour
-  Decision: Retry with exponential backoff — simpler than refresh, covers network failures too
+  Decision: Retry with exponential backoff. Simpler than refresh,
+            covers network failures too.
 
   Commits:
     abc1234 AUR-42: add retry with exponential backoff
@@ -46,29 +47,29 @@ AUR-42: Fix token refresh
 
 Every line traces to intent. Intent lives in the repo, not in a separate system that can go away.
 
-### 2. AI development: "What happened and why?"
+### 2. AI development: what happened and why?
 
-AI coding agents need structured context. They read code, but they cannot read the team's memory. When an agent picks up a task, it needs to know what was decided and why. When it finishes, the system needs to verify what it did.
+AI coding agents need structured context. They read code. They cannot read the team's memory. When an agent picks up a task, it needs to know what was decided and why. When it finishes, the system needs to verify what it did.
 
 Warrants give agents the same traceability humans get:
 
-- **Read intent** from task files or issues before writing code
-- **Reference the warrant** in every commit so the change is explainable
-- **Coordinate** through leases — if an agent crashes, its lock expires, another picks up the work
-- **Verify at merge** — a warrant is created automatically, binding the agent's commits to the original intent
+- Read intent from task files or issues before writing code
+- Reference the warrant in every commit so the change is explainable
+- Coordinate through leases (if an agent crashes, its lock expires, another picks up the work)
+- Verify at merge (a warrant is created automatically, binding the agent's commits to the original intent)
 
-No hidden state. No chat logs to parse. The warrant is the machine-readable explanation of what happened and why.
+The warrant is the machine-readable explanation of what happened and why.
 
-### 3. Compliance: "Prove this change was authorized"
+### 3. Compliance: prove this change was authorized
 
-Regulated environments need change management with audit trails. Who requested the change? Who approved it? What exactly was merged? Can you prove it hasn't been tampered with?
+Regulated environments need change management with audit trails. Who requested the change? Who approved it? What exactly was merged? Can you prove nothing was tampered with?
 
-Warrants are designed for this:
+Warrants handle this:
 
-- **Content-addressed IDs** — the warrant ID is `sha256(canonical_content)`. Any modification produces a different ID. The ID *is* the integrity proof.
-- **Append-only hash chain** — commits are notarized in sequence. Rewriting history breaks the chain, and the break is detectable.
-- **Merge-time creation** — the warrant captures reviewers, approvals, and exact commit SHAs at the moment code enters the protected branch.
-- **No external dependency** — intent, decisions, and audit history live in git. The repo is the audit trail.
+- **Content-addressed IDs.** The warrant ID is `sha256(canonical_content)`. Any modification produces a different ID. The ID is the integrity proof.
+- **Append-only hash chain.** Commits are notarized in sequence. Rewriting history breaks the chain. The break is detectable.
+- **Merge-time creation.** The warrant captures reviewers, approvals, and exact commit SHAs at the moment code enters the protected branch.
+- **No external dependency.** Intent, decisions, and audit history live in git. The repo is the audit trail.
 
 ```
 warrant verify
@@ -81,27 +82,23 @@ warrant verify
 
 ## What is a warrant?
 
-A warrant is a first-class object, not a ticket number.
+A warrant is a first-class decision object.
 
 | Field | What it captures |
 |-------|-----------------|
 | **Intent sources** | The tasks, issues, or decisions that motivated the change |
 | **Merged code** | Commit SHAs, PR, target branch |
 | **Authorization** | Who merged, who reviewed, who approved |
-| **Warrant ID** | `sha256(canonical_content)` — deterministic, tamper-evident |
+| **Warrant ID** | `sha256(canonical_content)`, deterministic, tamper-evident |
 | **Timestamp** | When the change reached the protected branch |
 
-A warrant is created at merge time because that is when we know what actually landed. Intent can exist before code (as a task or issue). The warrant binds intent to the accepted change after review.
+A warrant is created at merge time. That is when we know what actually landed. Intent exists before code, as a task or issue. The warrant binds intent to the accepted change after review.
 
 ### Intent sources are not warrants
 
-A backlog task, a GitHub issue, a design decision — these are **intent sources**. They describe what should happen and why. They exist before code.
+A backlog task, a GitHub issue, a design decision: these are intent sources. They describe what should happen and why. They exist before code.
 
-The warrant is created later, when code is merged, and it references those intent sources. This separation matters:
-
-- Intent can change during development
-- Multiple intent sources can converge into one change
-- The warrant captures the final state, not the plan
+The warrant is created when code is merged. It references those intent sources. This separation matters because intent can change during development, multiple intent sources can converge into one change, and the warrant captures the final state.
 
 ---
 
@@ -109,24 +106,22 @@ The warrant is created later, when code is merged, and it references those inten
 
 ### Two workflows, same result
 
-Pick whichever fits your team. Both produce warrants.
-
 #### GitHub PR workflow (teams)
 
 Normal GitHub flow. No new steps for the developer.
 
 ```
 1. Create a task or issue (the intent source)
-2. Branch and commit — hooks enforce task ID in every commit message
+2. Branch and commit (hooks enforce task ID in every commit message)
 3. Push and open a PR
 4. CI check verifies all commits have task IDs (blocks merge if not)
 5. Reviewer approves, developer clicks Merge
-6. GitHub webhook → warrant server creates the warrant automatically
+6. GitHub webhook fires, warrant server creates the warrant automatically
 ```
 
-The developer never runs a warrant command during this flow. The commit-msg hook is the only thing they notice — it requires a task ID prefix like `AUR-42:` in each commit message. Everything else happens automatically.
+The developer never runs a warrant command during this flow. The commit-msg hook is the only thing they notice. It requires a task ID prefix like `AUR-42:` in each commit message. Everything else happens automatically.
 
-#### Local workflow (solo / offline)
+#### Local workflow (solo, offline)
 
 One command to land code on the protected branch:
 
@@ -144,11 +139,11 @@ git checkout main
 warrant merge task/AUR-42-fix-token-refresh
 ```
 
-`warrant merge` does everything: verifies all commits have task IDs, merges `--no-ff`, marks the task done, records to the hash chain, deletes the branch. One command.
+`warrant merge` verifies all commits have task IDs, merges `--no-ff`, marks the task done, records to the hash chain, and deletes the branch. One command.
 
 ### Enforcement
 
-The goal is to make the right thing the easy thing, and bypasses visible.
+The right thing is the easy thing. Bypasses are visible.
 
 | Layer | What it does | Bypassable? |
 |-------|-------------|-------------|
@@ -159,11 +154,9 @@ The goal is to make the right thing the easy thing, and bypasses visible.
 | **Webhook** | Auto-creates warrant when PR is merged | Disable webhook |
 | **Hash chain** | Detects rewritten history, gaps, tampering | Cannot hide from `warrant verify` |
 
-You can bypass any single layer, but the hash chain sees everything. `warrant verify` compares the server's chain against local git history and reports gaps, missing commits, and rewrites.
+You can bypass any single layer. The hash chain sees everything. `warrant verify` compares the server's chain against local git history and reports gaps, missing commits, and rewrites.
 
 ### Setup
-
-Install hooks in any repo:
 
 ```bash
 warrant init AUR                  # creates .warrant/ and config
@@ -172,7 +165,7 @@ warrant setup-github              # adds CI workflow for PR checks
 warrant setup-webhook             # configures GitHub webhook (needs server)
 ```
 
-For GitHub branch protection (recommended), go to repo Settings > Branches > Add rule:
+For GitHub branch protection, go to repo Settings > Branches > Add rule:
 - Branch name pattern: `main`
 - Require status checks: enable, add "Warrant convention check"
 - Require pull request reviews: enable
@@ -213,48 +206,43 @@ Git history on this file is the audit trail. No external database needed.
 
 ## Content-addressed warrant IDs
 
-Warrant IDs are not sequential numbers. They are hashes of the warrant content:
+Warrant IDs are hashes of the warrant content:
 
 ```
 warrant_id = sha256(canonical_json)
 ```
 
-This means:
+No central allocator. Any developer or agent can work offline. Same content always produces the same ID. Changing any field produces a different ID. Recompute the hash to verify integrity.
 
-- **No central allocator** — any developer or agent can work offline
-- **Deterministic** — same content always produces the same ID
-- **Tamper-evident** — changing any field produces a different ID
-- **Self-verifying** — recompute the hash to verify integrity
-
-The canonical JSON has sorted keys, sorted arrays, no nulls, and a schema version field. Same inputs, same bytes, same hash. Always.
+The canonical JSON has sorted keys, sorted arrays, no nulls, and a schema version field. Same inputs, same bytes, same hash.
 
 ---
 
 ## Intent source plugins
 
-Warrant does not care where intent lives. It reads intent from pluggable sources:
+Warrant reads intent from pluggable sources:
 
 | Source | What it reads |
 |--------|--------------|
-| **Task files** | `.warrant/tasks/*.md` or `backlog/tasks/*.md` in your repo |
+| **Task files** | `.warrant/tasks/*.md` or `backlog/tasks/*.md` in the repo |
 | **GitHub Issues** | Issue number, title, body, labels, author via API or webhook |
 | *Future* | Jira, Linear, plain text, anything with a stable reference |
 
-At merge time, warrant extracts references from branch names, commit messages, and PR body, then resolves them through the appropriate plugin. The warrant records what was found.
+At merge time, warrant extracts references from branch names, commit messages, and PR body. It resolves them through the appropriate plugin and records what was found.
 
 ---
 
 ## The server is optional
 
-The repo is always the source of truth. The server adds coordination features for teams and agents:
+The repo is the source of truth. The server adds coordination features:
 
-- **ID allocation** — monotonic counters, no collisions across agents
-- **Status CAS** — compare-and-swap prevents race conditions on task transitions
-- **Leases** — exclusive locks with TTL, crashed agents auto-release
-- **Hash chain** — append-only notarization of commits for compliance verification
-- **Web UI** — Kanban board and trace view
+- **ID allocation.** Monotonic counters, no collisions across agents.
+- **Status CAS.** Compare-and-swap prevents race conditions on task transitions.
+- **Leases.** Exclusive locks with TTL. Crashed agents auto-release.
+- **Hash chain.** Append-only notarization of commits for compliance verification.
+- **Web UI.** Kanban board and trace view.
 
-You can use warrant with just task files and commit conventions. No server needed.
+Warrant works with task files and commit conventions alone. No server needed.
 
 ---
 
