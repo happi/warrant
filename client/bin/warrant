@@ -1086,9 +1086,65 @@ cmd_check() {
     fi
 }
 
+cmd_merge() {
+    local branch="${1:-}"
+
+    if [[ -z "$branch" ]]; then
+        echo "Usage: warrant merge BRANCH" >&2
+        echo "" >&2
+        echo "Merges BRANCH into the current branch with --no-ff," >&2
+        echo "creating a warranted merge commit." >&2
+        exit 1
+    fi
+
+    if ! git rev-parse --verify "$branch" >/dev/null 2>&1; then
+        echo "Error: Branch '$branch' not found" >&2
+        exit 1
+    fi
+
+    # Extract task ID from branch name (task/W-42-slug)
+    # Try configured prefix first, then fall back to any PREFIX-NNN pattern
+    local prefix="${WARRANT_PREFIX:-}"
+    local task_id=""
+    if [[ -n "$prefix" && "$branch" =~ (${prefix}-[0-9]+) ]]; then
+        task_id="${BASH_REMATCH[1]}"
+    elif [[ "$branch" =~ ([A-Z]+-[0-9]+) ]]; then
+        task_id="${BASH_REMATCH[1]}"
+    fi
+
+    if [[ -z "$task_id" ]]; then
+        echo "Error: Cannot extract task ID from branch '$branch'" >&2
+        echo "Expected branch name like: task/PREFIX-42-description" >&2
+        exit 1
+    fi
+
+    # Read task title for the merge message
+    local title=""
+    if [[ -n "${TASKS_DIR:-}" ]]; then
+        local file
+        file=$(find_task_file "$task_id" 2>/dev/null) || true
+        if [[ -n "$file" && -f "$file" ]]; then
+            title=$(read_frontmatter "$file" "title" | tr -d '"')
+        fi
+    fi
+
+    local msg="${task_id}: Merge ${branch}"
+    if [[ -n "$title" ]]; then
+        msg="${task_id}: ${title}"
+    fi
+
+    git merge --no-ff -m "$msg" "$branch"
+    echo ""
+    echo "Merged $branch with warrant $task_id"
+
+    # Clean up branch
+    git branch -d "$branch" 2>/dev/null && echo "Deleted branch $branch" || true
+}
+
 # Main dispatch
 case "${1:-help}" in
     task)    shift; cmd_task "$@" ;;
+    merge)   shift; cmd_merge "$@" ;;
     why)     shift; cmd_why "$@" ;;
     check)   shift; cmd_check "$@" ;;
     trace)   shift; cmd_trace "$@" ;;
@@ -1109,6 +1165,7 @@ Usage: warrant <command> [args]
 Commands:
   init [--backlog] [PREFIX]  Initialize warrant in the current repo
   task                       Create, view, list, and transition tasks
+  merge BRANCH               Merge branch to current with --no-ff warranted commit
   why [COMMIT]               Given a commit, show why it exists
   check [RANGE]              Find commits missing a warrant reference
   trace TASK-ID              Show full traceability for a task
@@ -1129,6 +1186,7 @@ Examples:
   warrant task create "Fix login bug" --intent "Users can't log in" --priority high
   warrant task start W-1
   warrant task archive W-1
+  warrant merge task/W-1-fix  # merge with warranted merge commit
   warrant why abc123          # why does this commit exist?
   warrant why HEAD~3          # works with any git ref
   warrant check               # find commits without warrants
