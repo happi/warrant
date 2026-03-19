@@ -2,10 +2,11 @@
 
 # Warrant commit-msg hook
 # Ensures every commit message starts with a task ID: PREFIX-NNN
+# AND that the corresponding task file exists.
 #
-# Valid:   "W-42: Fix token refresh"
-# Valid:   "W-42 Fix token refresh" (colon optional)
+# Valid:   "W-42: Fix token refresh"  (if .warrant/tasks/W-42.md exists)
 # Invalid: "Fix token refresh"
+# Invalid: "W-99: Ghost task"         (if no task file for W-99)
 #
 # Skip with: git commit --no-verify
 
@@ -18,7 +19,7 @@ if [[ "$MSG" =~ ^Merge ]]; then
 fi
 
 # Pattern: PREFIX-NUMBER at the start, where PREFIX is 1-10 uppercase letters
-PATTERN='^[A-Z]{1,10}-[0-9]+[: ]'
+PATTERN='^([A-Z]{1,10}-[0-9]+)[: ]'
 
 if [[ ! "$MSG" =~ $PATTERN ]]; then
     echo "" >&2
@@ -28,6 +29,38 @@ if [[ ! "$MSG" =~ $PATTERN ]]; then
     echo "  Got:      $MSG" >&2
     echo "" >&2
     echo "  Create a task first: warrant task create \"Description\"" >&2
+    echo "  Skip (not recommended): git commit --no-verify" >&2
+    echo "" >&2
+    exit 1
+fi
+
+TASK_ID="${BASH_REMATCH[1]}"
+
+# Find the task file — check .warrant/tasks/ and backlog/tasks/
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+FOUND=false
+
+for dir in "$REPO_ROOT/.warrant/tasks" "$REPO_ROOT/backlog/tasks"; do
+    [[ -d "$dir" ]] || continue
+    # Exact match (W-42.md) or title-format (w-42 - slug.md)
+    if [[ -f "$dir/${TASK_ID}.md" ]]; then
+        FOUND=true
+        break
+    fi
+    LOWER_ID=$(echo "$TASK_ID" | tr '[:upper:]' '[:lower:]')
+    if ls "$dir"/${TASK_ID}* "$dir"/${LOWER_ID}* 2>/dev/null | head -1 | grep -q .; then
+        FOUND=true
+        break
+    fi
+done
+
+if [[ "$FOUND" != "true" ]]; then
+    echo "" >&2
+    echo "BLOCKED: No task file found for $TASK_ID." >&2
+    echo "" >&2
+    echo "  Create it first: warrant task create \"Description\"" >&2
+    echo "  Then reference it: $TASK_ID: your commit message" >&2
+    echo "" >&2
     echo "  Skip (not recommended): git commit --no-verify" >&2
     echo "" >&2
     exit 1
