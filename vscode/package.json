@@ -42,7 +42,8 @@
       { "command": "warrant.linkCommit", "title": "Warrant: Link Current Commit" },
       { "command": "warrant.createTask", "title": "Warrant: Create Task" },
       { "command": "warrant.openTask", "title": "Warrant: Open Task" },
-      { "command": "warrant.refreshTasks", "title": "Warrant: Refresh", "icon": "$(refresh)" }
+      { "command": "warrant.refreshTasks", "title": "Warrant: Refresh", "icon": "$(refresh)" },
+      { "command": "warrant.toggleAnnotations", "title": "Warrant: Toggle Annotations" }
     ],
     "viewsContainers": {
       "activitybar": [

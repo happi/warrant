@@ -132,6 +132,17 @@ export function activate(context: vscode.ExtensionContext): void {
             taskListProvider.refresh();
             refreshStatusBar(source, prefix);
         }),
+        vscode.commands.registerCommand("warrant.toggleAnnotations", () => {
+            if (blameDecorator) {
+                blameDecorator.dispose();
+                blameDecorator = undefined;
+                vscode.window.showInformationMessage("Warrant annotations off");
+            } else {
+                blameDecorator = new BlameDecorator(source, cache, prefix);
+                context.subscriptions.push(blameDecorator);
+                vscode.window.showInformationMessage("Warrant annotations on");
+            }
+        }),
     );
 }
 
