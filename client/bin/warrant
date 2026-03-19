@@ -1092,8 +1092,8 @@ cmd_merge() {
     if [[ -z "$branch" ]]; then
         echo "Usage: warrant merge BRANCH" >&2
         echo "" >&2
-        echo "Merges BRANCH into the current branch with --no-ff," >&2
-        echo "creating a warranted merge commit." >&2
+        echo "The single command to land code on the protected branch." >&2
+        echo "Does everything: verify, merge --no-ff, mark done, record to hash chain." >&2
         exit 1
     fi
 
@@ -1102,8 +1102,26 @@ cmd_merge() {
         exit 1
     fi
 
+    # Must be on the protected branch
+    local protected="main"
+    if [[ -n "${WARRANT_DIR:-}" ]]; then
+        local config_file="${WARRANT_DIR}/config.yaml"
+        [[ -f "$config_file" ]] || config_file="${WARRANT_DIR}/config.yml"
+        if [[ -f "$config_file" ]]; then
+            local pb
+            pb=$(grep "^protected_branch:" "$config_file" 2>/dev/null | sed 's/protected_branch: *//' | tr -d "'\"" || true)
+            if [[ -n "$pb" ]]; then protected="$pb"; fi
+        fi
+    fi
+    local current_branch
+    current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    if [[ "$current_branch" != "$protected" ]]; then
+        echo "Error: You must be on '$protected' to merge. Currently on '$current_branch'." >&2
+        echo "  Run: git checkout $protected && warrant merge $branch" >&2
+        exit 1
+    fi
+
     # Extract task ID from branch name (task/W-42-slug)
-    # Try configured prefix first, then fall back to any PREFIX-NNN pattern
     local prefix="${WARRANT_PREFIX:-}"
     local task_id=""
     if [[ -n "$prefix" && "$branch" =~ (${prefix}-[0-9]+) ]]; then
@@ -1118,10 +1136,28 @@ cmd_merge() {
         exit 1
     fi
 
+    # Pre-merge check: verify all commits on the branch have task IDs
+    local pattern='[A-Z]{1,10}-[0-9]+'
+    local bad_commits=0
+    while IFS='|' read -r sha subject; do
+        [[ -z "$sha" ]] && continue
+        if [[ ! "$subject" =~ $pattern ]]; then
+            echo "  MISSING  ${sha:0:8} $subject" >&2
+            bad_commits=$((bad_commits + 1))
+        fi
+    done < <(git log --format="%H|%s" --no-merges "${protected}..${branch}" 2>/dev/null)
+
+    if [[ "$bad_commits" -gt 0 ]]; then
+        echo "" >&2
+        echo "Error: $bad_commits commit(s) on $branch have no task ID." >&2
+        echo "Every commit must start with PREFIX-N. Amend them first." >&2
+        exit 1
+    fi
+
     # Read task title for the merge message
     local title=""
+    local file=""
     if [[ -n "${TASKS_DIR:-}" ]]; then
-        local file
         file=$(find_task_file "$task_id" 2>/dev/null) || true
         if [[ -n "$file" && -f "$file" ]]; then
             title=$(read_frontmatter "$file" "title" | tr -d '"')
@@ -1133,12 +1169,56 @@ cmd_merge() {
         msg="${task_id}: ${title}"
     fi
 
-    git merge --no-ff -m "$msg" "$branch"
+    # Merge --no-ff (the only way code should reach the protected branch)
+    if ! git merge --no-ff -m "$msg" "$branch"; then
+        echo "Error: Merge failed. Resolve conflicts and run warrant merge again." >&2
+        exit 1
+    fi
     echo ""
     echo "Merged $branch with warrant $task_id"
 
-    # Clean up branch
+    # Mark task done
+    if [[ -n "$file" && -f "$file" ]]; then
+        local status
+        status=$(read_frontmatter "$file" "status")
+        if [[ "$status" != "done" ]]; then
+            update_frontmatter "$file" "status" "done"
+            git add "$file"
+            git commit --amend --no-edit --quiet
+            echo "Marked $task_id as done"
+        fi
+    fi
+
+    # Record to hash chain (if server configured)
+    if has_server && [[ -n "${WARRANT_ORG:-}" && -n "${WARRANT_PROJECT:-}" ]]; then
+        local sha
+        sha=$(git rev-parse HEAD)
+        local parent_sha
+        parent_sha=$(git rev-parse HEAD~1 2>/dev/null || echo "")
+        local timestamp
+        timestamp=$(git log --format="%aI" -1 HEAD)
+        local author
+        author=$(git log --format="%an" -1 HEAD)
+
+        curl -s -X POST "${WARRANT_URL}/api/ledger/record" \
+            -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"org\": \"${WARRANT_ORG}\",
+                \"project\": \"${WARRANT_PROJECT}\",
+                \"commit_sha\": \"${sha}\",
+                \"parent_sha\": \"${parent_sha}\",
+                \"summary\": $(echo "$msg" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read().strip()))'),
+                \"actor\": \"${author}\",
+                \"timestamp\": \"${timestamp}\"
+            }" > /dev/null 2>&1 && echo "Recorded to hash chain" || true
+    fi
+
+    # Delete the merged branch
     git branch -d "$branch" 2>/dev/null && echo "Deleted branch $branch" || true
+
+    echo ""
+    echo "Done. $task_id is warranted."
 }
 
 # Main dispatch

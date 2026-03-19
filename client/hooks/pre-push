@@ -1,40 +1,73 @@
 #!/usr/bin/env bash
 
-# Change Ledger pre-push hook
-# Warns about commits without task IDs in the push range.
-# This is a warning only — it does not block the push.
+# Warrant pre-push hook
+#
+# BLOCKS pushes to the protected branch unless every commit has a task ID.
+# WARNS about missing task IDs on feature branches.
+#
+# The protected branch is read from .warrant/config.yaml (default: main).
+# Skip with: git push --no-verify (but the hash chain will show the gap).
 
 PATTERN='[A-Z]{1,10}-[0-9]+'
 
-WARN_COUNT=0
+# Detect protected branch from config
+PROTECTED="main"
+DIR="$PWD"
+while [[ "$DIR" != "/" ]]; do
+    for cfg in "$DIR/.warrant/config.yaml" "$DIR/.warrant/config.yml" \
+               "$DIR/backlog/config.yaml" "$DIR/backlog/config.yml"; do
+        if [[ -f "$cfg" ]]; then
+            PB=$(grep "^protected_branch:" "$cfg" 2>/dev/null | sed 's/protected_branch: *//' | tr -d "'\"" || true)
+            if [[ -n "$PB" ]]; then PROTECTED="$PB"; fi
+            break 2
+        fi
+    done
+    DIR="$(dirname "$DIR")"
+done
+
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+PUSHING_TO_PROTECTED=false
 
 while read -r local_ref local_sha remote_ref remote_sha; do
+    # Check if pushing to protected branch
+    if [[ "$remote_ref" == "refs/heads/$PROTECTED" ]]; then
+        PUSHING_TO_PROTECTED=true
+    fi
+
     if [[ "$remote_sha" == "0000000000000000000000000000000000000000" ]]; then
-        # New branch — check all commits
         RANGE="$local_sha"
     else
         RANGE="${remote_sha}..${local_sha}"
     fi
 
+    MISSING=0
+    TOTAL=0
     while IFS= read -r line; do
         SHA=$(echo "$line" | cut -d' ' -f1)
         MSG=$(echo "$line" | cut -d' ' -f2-)
+        TOTAL=$((TOTAL + 1))
         if [[ ! "$MSG" =~ $PATTERN ]]; then
-            if [[ $WARN_COUNT -eq 0 ]]; then
-                echo "" >&2
-                echo "WARNING: The following commits have no task ID:" >&2
-            fi
-            echo "  ${SHA:0:8} $MSG" >&2
-            WARN_COUNT=$((WARN_COUNT + 1))
+            echo "  MISSING  ${SHA:0:8} $MSG" >&2
+            MISSING=$((MISSING + 1))
         fi
     done < <(git log --format="%H %s" --no-merges "$RANGE" 2>/dev/null)
+
+    if [[ "$MISSING" -gt 0 ]]; then
+        echo "" >&2
+        if [[ "$PUSHING_TO_PROTECTED" == true ]]; then
+            echo "BLOCKED: $MISSING of $TOTAL commit(s) have no task ID." >&2
+            echo "" >&2
+            echo "Every commit on $PROTECTED must reference a warrant." >&2
+            echo "Use 'warrant merge BRANCH' to land changes correctly." >&2
+            echo "" >&2
+            echo "To bypass (not recommended): git push --no-verify" >&2
+            exit 1
+        else
+            echo "WARNING: $MISSING of $TOTAL commit(s) have no task ID." >&2
+            echo "Consider amending before merging to $PROTECTED." >&2
+            echo "" >&2
+        fi
+    fi
 done
 
-if [[ $WARN_COUNT -gt 0 ]]; then
-    echo "" >&2
-    echo "  $WARN_COUNT commit(s) without task IDs. Consider amending." >&2
-    echo "" >&2
-fi
-
-# Always allow push (warning only)
 exit 0
