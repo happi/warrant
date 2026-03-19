@@ -81,9 +81,10 @@ Warrant is a **model**:
 ### This repository
 
 This repo contains:
-- A **CLI** for creating tasks, tracing changes, and coordinating agents
+- A **CLI** for creating tasks, tracing changes, generating release notes, and coordinating agents
+- A **VS Code extension** for sidebar task views and inline blame annotations
 - **Conventions** for branches, commits, and task files
-- An **optional server** for coordination and notarization
+- An **optional server** for coordination, web UI, and notarization
 
 You don't need all of it. The model works with just task files and commit conventions.
 
@@ -249,7 +250,7 @@ Designed for systems where you must explain every change: fintech, healthcare, r
 ```bash
 # Option 1: Download a release
 # https://github.com/happi/warrant/releases
-tar xzf warrant-cli-v0.1.0.tar.gz -C ~/.warrant-cli
+tar xzf warrant-cli-v0.2.0.tar.gz -C ~/.warrant-cli
 export PATH="$HOME/.warrant-cli/bin:$PATH"
 
 # Option 2: Clone and use directly
@@ -273,7 +274,7 @@ Tasks in the sidebar, blame annotations inline, trace view with full audit trail
 ```bash
 # Option 1: Install from .vsix release
 # Download from https://github.com/happi/warrant/releases
-code --install-extension warrant-vscode-v0.1.0.vsix
+code --install-extension warrant-vscode-v0.2.0.vsix
 
 # Option 2: Build from source
 cd warrant/vscode
@@ -282,7 +283,7 @@ npm run compile
 # Then: Ctrl+Shift+P > "Developer: Install Extension from Location" > select warrant/vscode
 ```
 
-The extension activates when it finds `.warrant/.env` in the open folder.
+The extension activates when it finds `.warrant/config.yaml`, `.warrant/tasks/`, or `.warrant/.env` in the open folder.
 
 ### Server (optional, Erlang/OTP)
 
@@ -304,7 +305,7 @@ docker run -p 8090:8090 -v /data:/data warrant-server
 warrant/
 ├── client/          CLI tools, git hooks, CI integration
 │   ├── bin/         warrant, warrant-setup, install-hooks
-│   ├── hooks/       commit-msg, pre-push
+│   ├── hooks/       commit-msg, pre-push, post-push
 │   └── ci/          GitHub Actions workflow template
 ├── server/          Erlang/OTP (optional: ID, CAS, leases, hash chain)
 │   ├── src/         Erlang source
@@ -324,7 +325,7 @@ See [server/docs/](server/docs/) for architecture, API reference, and data model
 The repo includes GitHub Actions workflows:
 
 - **CI** (on push/PR): compiles server, compiles extension, shellchecks CLI, verifies task IDs in commit messages
-- **Release** (on tag `v*`): packages CLI tarball and VS Code .vsix, creates GitHub Release
+- **Release** (on tag `v*`): packages CLI tarball and VS Code .vsix, generates warrant-based release notes, creates GitHub Release
 
 ## License
 

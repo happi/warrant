@@ -1,177 +1,179 @@
 # Warrant — Project Setup Guide
 
+## Quick Start (local-first, no server)
+
+```bash
+# Add warrant to your PATH
+export PATH="/path/to/warrant/client/bin:$PATH"
+
+# Initialize in your project
+cd your-project
+warrant init PRJ
+
+# Install git hooks (enforces task IDs in commit messages)
+install-hooks
+
+# Create your first task
+warrant task create "First task" --intent "Why it matters" --priority high
+```
+
+That's it. Tasks live in `.warrant/tasks/` as markdown files. Git history is the audit trail.
+
 ## Prerequisites
 
-1. A running Warrant server
-2. `curl` and `jq` installed
-3. An organization and user account on the server
+- `bash` 4+ (for associative arrays in `release-notes`)
+- `git`
+- `jq` (optional, only needed for server features)
 
-## Step 1: Get Your Credentials
+## Configuration
 
-If your organization already exists, ask an admin for:
-- Organization slug
-- Your API token
+Warrant reads from `.warrant/config.yaml` (or `backlog/config.yml` in backlog mode):
 
-If you're setting up a new organization, use `warrant-setup` (see Step 3).
+```yaml
+# .warrant/config.yaml
+prefix: PRJ
+tasks_dir: .warrant/tasks
+protected_branch: main
 
-## Step 2: Configure Environment
-
-```bash
-cp .env.example .env
+# Server (optional — enables ID allocation, CAS, leases, hash chain)
+# server:
+#   url: http://localhost:8090
+#   org: myorg
+#   project: myproject
+#   token_env: WARRANT_TOKEN
 ```
 
-Edit `.env`:
+### Backlog mode
+
+For projects using [Backlog.md](https://github.com/MrLesk/Backlog.md):
 
 ```bash
-WARRANT_URL=https://ledger.example.com  # Your server URL
-WARRANT_ORG=acme                         # Organization slug
-WARRANT_PROJECT=backend                  # Project slug
-WARRANT_TOKEN=cl_xxxx                    # Your API token
-WARRANT_PREFIX=BE                        # Task ID prefix
+warrant init --backlog PRJ
 ```
 
-Source it in your shell (or add to your `.bashrc`/`.zshrc`):
+This creates `backlog/config.yml` with title-based filenames and a completed directory. When the `backlog` CLI is installed, warrant delegates task operations to it automatically.
+
+## Git Hooks
 
 ```bash
-source /path/to/warrant-client/.env
+install-hooks
 ```
 
-## Step 3: Register Your Project
+Installs:
+- **commit-msg** — ensures every commit starts with a task ID (`PRJ-42: ...`)
+- **pre-push** — warns if commits don't reference a task
+- **post-push** — records commits to the compliance hash chain (requires server)
 
-For first-time setup (creates org + project + user):
-
-```bash
-./bin/warrant-setup
-```
-
-This will:
-1. Create the organization (if it doesn't exist)
-2. Create the project with your prefix
-3. Create a user and print the API token
-4. Update your `.env` with the token
-
-For adding a project to an existing org:
-
-```bash
-./bin/warrant-setup --project-only
-```
-
-## Step 4: Install Git Hooks
-
-```bash
-./bin/install-hooks
-```
-
-This installs:
-- **commit-msg** hook: Ensures every commit message starts with a task ID (e.g., `BE-42: ...`)
-- **pre-push** hook: Warns if any commits in the push don't reference a task
-
-To skip the hook for a specific commit (rare — e.g., merge commits):
+To skip for a specific commit (rare — merge commits, initial commit):
 
 ```bash
 git commit --no-verify -m "Merge branch 'main'"
 ```
 
-## Step 5: Daily Workflow
+## Daily Workflow
 
 ### Create a task
 
 ```bash
-./bin/warrant task create "Fix token refresh" \
+warrant task create "Fix token refresh" \
   --intent "Users get 401 on long sessions" \
   --priority high \
   --labels bug,auth
+# > Created .warrant/tasks/PRJ-1.md
 ```
 
-Output: `Created task BE-47`
-
-### Start work
+### Start work (creates branch automatically)
 
 ```bash
-# Create branch with task ID
-git checkout -b task/BE-47-fix-token-refresh
-
-# Claim the task
-./bin/warrant task start BE-47
+warrant task start PRJ-1
+# > Created branch: task/PRJ-1-fix-token-refresh
+# > PRJ-1: open > in_progress
 ```
 
 ### Commit with task ID
 
 ```bash
-git commit -m "BE-47: Fix token refresh logic"
-# The commit-msg hook verifies the task ID is present
-```
-
-### Link artifacts
-
-```bash
-# Link the branch (automatic if using task/* branch naming)
-./bin/warrant link branch BE-47 task/BE-47-fix-token-refresh
-
-# Link commits (or use ledger-scan-commits)
-./bin/warrant link commit BE-47 abc123
-
-# Link a PR
-./bin/ledger-link-pr BE-47 17 https://github.com/acme/backend/pull/17
+git commit -m "PRJ-1: fix token refresh logic"
+# The commit-msg hook verifies the task ID
 ```
 
 ### Complete the task
 
 ```bash
-./bin/warrant task review BE-47   # Move to in_review
-./bin/warrant task done BE-47     # Move to done (after merge)
+warrant task review PRJ-1   # in_progress > in_review
+warrant task done PRJ-1     # in_review > done
 ```
 
 ### Check trace
 
 ```bash
-./bin/warrant trace BE-47
+warrant trace PRJ-1
 ```
 
-## Step 6: CI Integration (Optional)
+### Generate release notes
+
+```bash
+warrant release-notes                          # since latest tag
+warrant release-notes --since v0.1.0           # since specific tag
+warrant release-notes -o RELEASE.md            # write to file
+```
+
+## Server Setup (optional)
+
+Only needed for ID allocation, status CAS, leases, or the compliance hash chain.
+
+### Get credentials
+
+Create a `.warrant/.env` file (gitignored):
+
+```bash
+WARRANT_URL=https://ledger.example.com
+WARRANT_ORG=acme
+WARRANT_PROJECT=backend
+WARRANT_TOKEN=cl_xxxx
+```
+
+Or set `token_env` in config.yaml to read the token from an environment variable.
+
+### First-time setup
+
+```bash
+./bin/warrant-setup
+```
+
+Creates org, project, and user on the server.
+
+### Hash chain commands (require server)
+
+```bash
+warrant record              # record recent commits to compliance hash chain
+warrant verify              # verify repo integrity against server chain
+```
+
+## CI Integration
 
 ### GitHub Actions
 
-Copy `ci/github-action.yml` to `.github/workflows/warrant.yml` in your project.
-
-This automatically:
-- Validates commit messages contain task IDs
-- Links commits and PRs to tasks
-- Updates task status on PR merge
-
-### Manual CI
-
-Add to your CI pipeline:
-
 ```bash
-# After PR merge
-./bin/ledger-scan-commits --since "last-deploy" --auto-link
+warrant setup-github
 ```
+
+Copies `ci/warrant-check.yml` to `.github/workflows/warrant.yml`. This validates commit messages contain task IDs on every PR.
+
+Add `WARRANT_TOKEN` as a repository secret if using server features.
 
 ## Troubleshooting
 
-### "Task not found"
+### "No tasks directory found"
 
-Check that:
-- Your `WARRANT_ORG` and `WARRANT_PROJECT` are correct
-- The task ID prefix matches your project prefix
-- The task was created on the correct server
-
-### "Conflict: expected status X but found Y"
-
-Another developer or agent changed the task status. Fetch the current state:
-
-```bash
-./bin/warrant task get BE-47
-```
-
-Then transition from the actual current status.
+Run `warrant init PREFIX` in your project root.
 
 ### Hook rejects commit
 
-The commit message must start with a task ID: `XX-NNN: description`
+The commit message must start with a task ID: `PRJ-NNN: description`
 
-If you need to bypass (e.g., initial commit, merge):
-```bash
-git commit --no-verify -m "Initial commit"
-```
+Bypass with `git commit --no-verify` for exceptional cases (merge commits, initial commit).
+
+### "Task not found"
+
+Check that the task file exists in `.warrant/tasks/` (or `backlog/tasks/` in backlog mode). If using server mode, verify `WARRANT_ORG` and `WARRANT_PROJECT` are correct.

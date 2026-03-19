@@ -56,6 +56,20 @@ cd vscode && npm ci && npm run compile
 # Client has no build step (bash scripts)
 ```
 
+## CLI Commands
+
+```bash
+warrant init [--backlog] [PREFIX]   # Initialize warrant in a repo
+warrant task create|get|list|start|review|done|block|archive
+warrant trace TASK-ID               # Full traceability for a task
+warrant board                       # Kanban board (browser or terminal)
+warrant release-notes [--since TAG] [-o FILE]  # Generate release notes
+warrant record [N]                  # Record commits to hash chain (server)
+warrant verify                      # Verify against server chain (server)
+warrant setup-github                # Install GitHub Actions workflow
+warrant setup-webhook               # Configure GitHub webhook
+```
+
 ## Commit hygiene
 
 - Do not add AI attribution lines (Co-Authored-By or similar) to commits

@@ -447,3 +447,92 @@ POST /api/v1/orgs/:org_slug/users/:username/token
 ```
 
 Response (200): returns new `api_token`, invalidates old one.
+
+---
+
+## Compliance Hash Chain
+
+### Record Commit
+
+```
+POST /api/ledger/record
+```
+
+```json
+{
+  "org": "stenmans",
+  "project": "warrant",
+  "commit_sha": "abc123...",
+  "parent_sha": "def456...",
+  "summary": "W-42: Fix token refresh",
+  "actor": "erik",
+  "timestamp": "2026-03-18T10:30:00Z"
+}
+```
+
+Response (201):
+
+```json
+{
+  "data": {
+    "seq": 1,
+    "chain_hash": "sha256..."
+  }
+}
+```
+
+Requires superadmin token. Each entry chains to the previous via SHA-256.
+
+### Read Chain
+
+```
+GET /api/ledger/chain/:org/:project
+```
+
+Returns paginated list of chain entries.
+
+### Verify Chain
+
+```
+GET /api/ledger/verify/:org/:project
+```
+
+Response (200):
+
+```json
+{
+  "data": {
+    "valid": true,
+    "length": 42
+  }
+}
+```
+
+If broken, returns `valid: false` with `break_at` indicating the first invalid entry.
+
+---
+
+## GitHub Webhook
+
+```
+POST /webhooks/github
+```
+
+Receives GitHub webhook events (push, pull_request). Validates HMAC signature against the configured webhook secret. On PR events, extracts task IDs from the PR title and updates the status cache.
+
+---
+
+## Web UI Routes
+
+The server also serves a web UI for browser-based access:
+
+| Route | Description |
+|-------|-------------|
+| `GET /` | Home dashboard |
+| `GET /login` | Login form |
+| `GET /board/:org/:project` | Kanban board |
+| `GET /tasks/:org/:project/:task_id` | Task detail page |
+| `GET /trace/:org/:project/:task_id` | Trace detail page |
+| `GET /admin` | Admin dashboard |
+
+Authentication is via cookie (`warrant_token`), set during login.

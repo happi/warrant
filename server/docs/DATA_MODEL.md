@@ -167,3 +167,68 @@ Every query that touches task data includes `org_id` in its WHERE clause. The AP
 The `org_id` column is denormalized on `tasks` (in addition to the `project_id → org_id` relationship) to allow efficient queries without joins for the common case.
 
 No cross-organization queries exist in the API. Admin endpoints for the service itself are separate and protected.
+
+## Additional Tables (added in migrations)
+
+### hash_chain
+
+Append-only compliance ledger. Each entry chains to the previous via SHA-256.
+
+| Column          | Type    | Constraints          | Description                    |
+|----------------|---------|----------------------|--------------------------------|
+| seq            | INTEGER | PK AUTOINCREMENT     | Monotonic sequence number      |
+| org            | TEXT    | NOT NULL             | Organization slug              |
+| project        | TEXT    | NOT NULL             | Project slug                   |
+| commit_sha     | TEXT    | NOT NULL             | Git commit SHA                 |
+| parent_sha     | TEXT    |                      | Parent commit SHA              |
+| summary        | TEXT    |                      | Commit message subject         |
+| actor          | TEXT    |                      | Who pushed the commit          |
+| timestamp      | TEXT    |                      | Commit timestamp               |
+| prev_chain_hash| TEXT    |                      | Hash of previous chain entry   |
+| chain_hash     | TEXT    | NOT NULL             | SHA-256 of this entry          |
+
+### webhook_configs
+
+GitHub webhook configuration per project.
+
+| Column                | Type    | Constraints          | Description                    |
+|----------------------|---------|----------------------|--------------------------------|
+| id                   | TEXT    | PK                   | UUID                           |
+| org_id               | TEXT    | FK → organizations   | Owning organization            |
+| project_id           | TEXT    | FK → projects        | Owning project                 |
+| provider             | TEXT    | NOT NULL             | `github`                       |
+| repo_url             | TEXT    | NOT NULL             | GitHub repository URL          |
+| webhook_secret       | TEXT    | NOT NULL             | HMAC verification secret       |
+| access_token_encrypted| TEXT   |                      | Encrypted GitHub access token  |
+| created_at           | TEXT    | NOT NULL             | ISO 8601 timestamp             |
+
+### status_cache
+
+Caches task status from git-based warrant files (used by webhook handler).
+
+| Column       | Type    | Constraints          | Description                    |
+|-------------|---------|----------------------|--------------------------------|
+| org          | TEXT    | NOT NULL             | Organization slug              |
+| project      | TEXT    | NOT NULL             | Project slug                   |
+| task_id      | TEXT    | NOT NULL             | Task ID                        |
+| status       | TEXT    | NOT NULL             | Current status                 |
+| updated_by   | TEXT    |                      | Who updated it                 |
+| commit_sha   | TEXT    |                      | Commit that changed it         |
+| updated_at   | TEXT    | NOT NULL             | ISO 8601 timestamp             |
+
+PK(org, project, task_id)
+
+### leases_v2
+
+Multi-tenant lease table (replaces task-FK-based leases for cross-project use).
+
+| Column       | Type    | Constraints          | Description                    |
+|-------------|---------|----------------------|--------------------------------|
+| org          | TEXT    | NOT NULL             | Organization slug              |
+| project      | TEXT    | NOT NULL             | Project slug                   |
+| task_id      | TEXT    | NOT NULL             | Task ID                        |
+| owner        | TEXT    | NOT NULL             | Agent or user                  |
+| acquired_at  | TEXT    | NOT NULL             | ISO 8601 timestamp             |
+| expires_at   | TEXT    | NOT NULL             | ISO 8601 timestamp             |
+
+PK(org, project, task_id)
