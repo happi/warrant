@@ -793,13 +793,19 @@ render_link_group(Label, Items) ->
      lists:map(fun
          (#{ref := Ref, url := Url}) when Url =/= null ->
              [<<"<li><a href=\"">>, warrant_html:h(Url), <<"\">">>,
-              warrant_html:h(Ref), <<"</a></li>">>];
+              warrant_html:h(short_ref(Ref)), <<"</a></li>">>];
          (#{ref := Ref}) ->
-             [<<"<li><code>">>, warrant_html:h(Ref), <<"</code></li>">>];
+             [<<"<li><code>">>, warrant_html:h(short_ref(Ref)), <<"</code></li>">>];
          (Ref) when is_binary(Ref) ->
-             [<<"<li><code>">>, warrant_html:h(Ref), <<"</code></li>">>]
+             [<<"<li><code>">>, warrant_html:h(short_ref(Ref)), <<"</code></li>">>]
      end, Items),
      <<"</ul>">>].
+
+%% Truncate commit SHAs to 7 chars for display. Leave other refs unchanged.
+short_ref(Ref) when byte_size(Ref) =:= 40 ->
+    binary:part(Ref, 0, 7);
+short_ref(Ref) ->
+    Ref.
 
 render_audit_event(#{event_type := Type, actor := Actor,
                      timestamp := Time} = E) ->

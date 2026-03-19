@@ -197,7 +197,7 @@ function gitLogForFile(cwd: string, filePath: string): Promise<Array<{ event_typ
 
 function gitLogGrep(cwd: string, taskId: string): Promise<Array<{ sha: string; summary: string }>> {
     return new Promise((resolve) => {
-        execFile("git", ["log", "--all", "--format=%H|%s", `--grep=${taskId}`],
+        execFile("git", ["log", "--all", "--format=%h|%s", `--grep=${taskId}`],
             { cwd, maxBuffer: 512 * 1024 },
             (err, stdout) => {
                 if (err) return resolve([]);
