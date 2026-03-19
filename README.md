@@ -292,6 +292,13 @@ docker run -p 8090:8090 -v /data:/data warrant-server
 
 ---
 
+## Documentation
+
+- [Setup Guide](docs/setup.md). Solo, team, CI-only, and regulated environment configurations.
+- [Audit Trail Walkthrough](docs/audit-trail.md). How to produce, query, and verify an audit trail.
+- [AI Agent Integration](docs/ai-agents.md). How agents read intent, coordinate, and produce traceable code.
+- [Server docs](server/docs/). Architecture, API reference, data model, and design notes.
+
 ## Project structure
 
 ```
@@ -299,10 +306,9 @@ warrant/
   client/          CLI (bash), git hooks, CI integration
   server/          Erlang/OTP server (optional)
   vscode/          VS Code extension (TypeScript)
+  docs/            Guides: setup, audit trail, AI agents
   backlog/         Warrant's own task tracking
 ```
-
-See [server/docs/](server/docs/) for architecture, API reference, and design notes.
 
 ## License
 
