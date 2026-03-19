@@ -107,24 +107,76 @@ The warrant is created later, when code is merged, and it references those inten
 
 ## How it works
 
-### Day-to-day flow
+### Two workflows, same result
+
+Pick whichever fits your team. Both produce warrants.
+
+#### GitHub PR workflow (teams)
+
+Normal GitHub flow. No new steps for the developer.
+
+```
+1. Create a task or issue (the intent source)
+2. Branch and commit — hooks enforce task ID in every commit message
+3. Push and open a PR
+4. CI check verifies all commits have task IDs (blocks merge if not)
+5. Reviewer approves, developer clicks Merge
+6. GitHub webhook → warrant server creates the warrant automatically
+```
+
+The developer never runs a warrant command during this flow. The commit-msg hook is the only thing they notice — it requires a task ID prefix like `AUR-42:` in each commit message. Everything else happens automatically.
+
+#### Local workflow (solo / offline)
+
+One command to land code on the protected branch:
 
 ```bash
-# 1. Create a task (intent source)
 warrant task create "Fix token refresh" \
   --intent "Users get 401 errors after sessions longer than 1 hour"
 
-# 2. Start work (creates branch)
 warrant task start AUR-42
+# > Created branch: task/AUR-42-fix-token-refresh
 
-# 3. Work and commit (reference the task)
 git commit -m "AUR-42: add retry with exponential backoff"
+git commit -m "AUR-42: add backoff tests"
 
-# 4. Merge (warrant is created at merge time)
+git checkout main
 warrant merge task/AUR-42-fix-token-refresh
 ```
 
-The merge creates a `--no-ff` merge commit and a warrant object that binds the task intent to the merged commits.
+`warrant merge` does everything: verifies all commits have task IDs, merges `--no-ff`, marks the task done, records to the hash chain, deletes the branch. One command.
+
+### Enforcement
+
+The goal is to make the right thing the easy thing, and bypasses visible.
+
+| Layer | What it does | Bypassable? |
+|-------|-------------|-------------|
+| **commit-msg hook** | Blocks commits without a task ID | `--no-verify` |
+| **pre-push hook** | Blocks pushes to main without task IDs | `--no-verify` |
+| **CI status check** | Blocks PR merge if commits lack task IDs | Repo admin |
+| **Branch protection** | Requires CI + review to merge to main | Repo admin |
+| **Webhook** | Auto-creates warrant when PR is merged | Disable webhook |
+| **Hash chain** | Detects rewritten history, gaps, tampering | Cannot hide from `warrant verify` |
+
+You can bypass any single layer, but the hash chain sees everything. `warrant verify` compares the server's chain against local git history and reports gaps, missing commits, and rewrites.
+
+### Setup
+
+Install hooks in any repo:
+
+```bash
+warrant init AUR                  # creates .warrant/ and config
+install-hooks                     # installs commit-msg, pre-push hooks
+warrant setup-github              # adds CI workflow for PR checks
+warrant setup-webhook             # configures GitHub webhook (needs server)
+```
+
+For GitHub branch protection (recommended), go to repo Settings > Branches > Add rule:
+- Branch name pattern: `main`
+- Require status checks: enable, add "Warrant convention check"
+- Require pull request reviews: enable
+- Do not allow bypassing: enable
 
 ### Task files live in the repo
 
