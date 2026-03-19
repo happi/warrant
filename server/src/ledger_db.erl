@@ -257,5 +257,67 @@ migrations() ->
                 created_at TEXT NOT NULL,
                 UNIQUE(org_id, project_id, provider)
             );
+        ">>},
+
+        {5, <<"
+            CREATE TABLE intent_sources (
+                id TEXT PRIMARY KEY,
+                source_type TEXT NOT NULL,
+                source_ref TEXT NOT NULL,
+                title TEXT,
+                body TEXT,
+                author TEXT,
+                labels TEXT,
+                metadata TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                org_id TEXT,
+                project_id TEXT
+            );
+
+            CREATE INDEX idx_intent_sources_org_project
+                ON intent_sources(org_id, project_id);
+            CREATE INDEX idx_intent_sources_type_ref
+                ON intent_sources(source_type, source_ref);
+
+            CREATE TABLE warrants (
+                warrant_id TEXT PRIMARY KEY,
+                summary TEXT NOT NULL,
+                canonical_content TEXT NOT NULL,
+                merge_commit TEXT,
+                merge_actor TEXT,
+                merged_at TEXT,
+                pr_number TEXT,
+                pr_url TEXT,
+                pr_title TEXT,
+                repository TEXT,
+                target_branch TEXT,
+                reviewers TEXT,
+                approvals TEXT,
+                metadata TEXT,
+                created_at TEXT NOT NULL,
+                org_id TEXT,
+                project_id TEXT
+            );
+
+            CREATE INDEX idx_warrants_org_project
+                ON warrants(org_id, project_id);
+            CREATE INDEX idx_warrants_merge_commit
+                ON warrants(merge_commit);
+
+            CREATE TABLE warrant_intents (
+                warrant_id TEXT NOT NULL REFERENCES warrants(warrant_id),
+                intent_source_id TEXT NOT NULL REFERENCES intent_sources(id),
+                PRIMARY KEY (warrant_id, intent_source_id)
+            );
+
+            CREATE TABLE warrant_commits (
+                warrant_id TEXT NOT NULL REFERENCES warrants(warrant_id),
+                commit_sha TEXT NOT NULL,
+                PRIMARY KEY (warrant_id, commit_sha)
+            );
+
+            CREATE INDEX idx_warrant_commits_sha
+                ON warrant_commits(commit_sha);
         ">>}
     ].

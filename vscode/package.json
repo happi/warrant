@@ -2,7 +2,7 @@
   "name": "vscode-warrant",
   "displayName": "Warrant",
   "description": "Task traceability — see why code exists, linked to tasks, PRs, and intent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "happihacking",
   "engines": {
     "vscode": "^1.85.0"

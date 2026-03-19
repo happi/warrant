@@ -1,6 +1,6 @@
 {application, backlog_server, [
     {description, "Change Ledger — traceability service for software systems"},
-    {vsn, "0.2.0"},
+    {vsn, "0.3.0"},
     {registered, [backlog_srv, backlog_id_srv, ledger_db, ledger_task_srv,
                   ledger_audit_srv, ledger_lease_reaper]},
     {mod, {backlog_app, []}},
