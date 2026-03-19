@@ -12,6 +12,8 @@
     "workspaceContains:.warrant/config.yaml",
     "workspaceContains:.warrant/tasks",
     "workspaceContains:.warrant/.env",
+    "workspaceContains:backlog/config.yml",
+    "workspaceContains:backlog/config.yaml",
     "onView:warrant.currentTask",
     "onView:warrant.tasks"
   ],

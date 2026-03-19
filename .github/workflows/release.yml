@@ -47,6 +47,14 @@ jobs:
             -C client \
             bin/ hooks/ ci/ .env.example SETUP.md
 
+      # Publish VS Code extension to marketplace
+      - name: Publish to VS Code Marketplace
+        working-directory: vscode
+        run: npx @vscode/vsce publish --packagePath ../warrant-vscode-${{ github.ref_name }}.vsix
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        if: env.VSCE_PAT != ''
+
       # Create GitHub Release
       - name: Create Release
         uses: softprops/action-gh-release@v2

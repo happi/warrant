@@ -24,7 +24,7 @@ jobs:
 
       - name: Run tests
         working-directory: server
-        run: rebar3 eunit || true  # no tests yet, don't fail
+        run: rebar3 eunit
 
   vscode:
     name: VS Code Extension
