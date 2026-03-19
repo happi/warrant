@@ -35,10 +35,7 @@ authenticate_cookie(Req) ->
     Cookies = cowboy_req:parse_cookies(Req),
     case lists:keyfind(<<"warrant_token">>, 1, Cookies) of
         {_, Token} ->
-            case ledger_auth:authenticate(
-                cowboy_req:set_resp_header(<<"authorization">>,
-                    <<"Bearer ", Token/binary>>, Req))
-            of
+            case ledger_auth:authenticate_token(Token) of
                 {ok, User} -> User;
                 _ -> undefined
             end;
@@ -113,10 +110,7 @@ render(login_post, _User, Req0) ->
     {ok, Body, Req1} = cowboy_req:read_body(Req0),
     Params = cow_qs:parse_qs(Body),
     Token = proplists:get_value(<<"token">>, Params, <<>>),
-    case ledger_auth:authenticate(
-        cowboy_req:set_resp_header(<<"authorization">>,
-            <<"Bearer ", Token/binary>>, Req1))
-    of
+    case ledger_auth:authenticate_token(Token) of
         {ok, _} ->
             Req2 = cowboy_req:set_resp_cookie(<<"warrant_token">>, Token, Req1,
                 #{path => <<"/">>, http_only => true, same_site => lax,

@@ -11,7 +11,7 @@
 
 -export([generate_token/0, hash_token/1]).
 -export([require/3, require_superadmin/3]).
--export([authenticate/1]).
+-export([authenticate/1, authenticate_token/1]).
 
 %%% Token generation
 
@@ -78,6 +78,10 @@ authenticate(Req) ->
         _ ->
             {error, invalid_header}
     end.
+
+%% Authenticate a raw token string directly (for cookie-based UI auth).
+authenticate_token(RawToken) ->
+    lookup_by_token(RawToken).
 
 %%% Internal
 
