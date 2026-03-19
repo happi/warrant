@@ -1,0 +1,249 @@
+# Warrant — GitHub Actions PR Check
+#
+# Copy to .github/workflows/warrant.yml or run: warrant setup-github
+#
+# Reads config from .warrant/config.yaml (or backlog/config.yaml)
+# Only ONE secret required: WARRANT_TOKEN
+#
+# Config file must contain:
+#   prefix: W          (your task ID prefix)
+#   server:
+#     url: https://your-server
+#     org: your-org
+#     project: your-project
+
+name: Warrant
+
+on:
+  pull_request:
+    types: [opened, synchronize, closed]
+  push:
+    branches: [main, master]
+
+jobs:
+  validate-commits:
+    name: Validate warrants
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Load warrant config
+        id: config
+        run: |
+          CONFIG=""
+          if [[ -f .warrant/config.yaml ]]; then
+            CONFIG=".warrant/config.yaml"
+          elif [[ -f backlog/config.yaml ]]; then
+            CONFIG="backlog/config.yaml"
+          elif [[ -f backlog/config.yml ]]; then
+            CONFIG="backlog/config.yml"
+          fi
+
+          if [[ -z "$CONFIG" ]]; then
+            echo "::error::No warrant config found (.warrant/config.yaml or backlog/config.yaml)"
+            exit 1
+          fi
+
+          PREFIX=$(grep "^prefix:" "$CONFIG" | sed 's/prefix: *//' | tr -d "'\"")
+          URL=$(grep "^  url:" "$CONFIG" | sed 's/  url: *//' | tr -d "'\"" || true)
+          ORG=$(grep "^  org:" "$CONFIG" | sed 's/  org: *//' | tr -d "'\"" || true)
+          PROJECT=$(grep "^  project:" "$CONFIG" | sed 's/  project: *//' | tr -d "'\"" || true)
+
+          echo "prefix=$PREFIX" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "org=$ORG" >> "$GITHUB_OUTPUT"
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "Loaded config: prefix=$PREFIX org=$ORG project=$PROJECT"
+
+      - name: Check commit messages for task IDs
+        run: |
+          PREFIX="${{ steps.config.outputs.prefix }}"
+          PATTERN="${PREFIX}-[0-9]+"
+          ERRORS=0
+          while IFS= read -r line; do
+            SHA=$(echo "$line" | cut -d' ' -f1)
+            MSG=$(echo "$line" | cut -d' ' -f2-)
+            if [[ ! "$MSG" =~ $PATTERN ]]; then
+              echo "::error::Commit ${SHA:0:8} missing task ID ($PREFIX-N): $MSG"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done < <(git log --format="%H %s" --no-merges origin/${{ github.base_ref }}..HEAD)
+          if [[ $ERRORS -gt 0 ]]; then
+            echo "::error::$ERRORS commit(s) without warrant task IDs"
+            exit 1
+          fi
+          echo "All commits have warrant task IDs"
+
+      - name: Link artifacts to tasks
+        if: steps.config.outputs.url != ''
+        env:
+          WARRANT_TOKEN: ${{ secrets.WARRANT_TOKEN }}
+        run: |
+          PREFIX="${{ steps.config.outputs.prefix }}"
+          URL="${{ steps.config.outputs.url }}"
+          ORG="${{ steps.config.outputs.org }}"
+          PROJECT="${{ steps.config.outputs.project }}"
+          BASE="${URL}/api/v1/orgs/${ORG}/projects/${PROJECT}"
+          PR_NUM="${{ github.event.pull_request.number }}"
+          PR_URL="${{ github.event.pull_request.html_url }}"
+          BRANCH="${{ github.head_ref }}"
+
+          TASK_IDS=$(git log --format="%s" --no-merges origin/${{ github.base_ref }}..HEAD \
+            | grep -oE "${PREFIX}-[0-9]+" | sort -u)
+
+          LINKED=""
+          for TASK_ID in $TASK_IDS; do
+            # Link branch
+            curl -sf -X POST "${BASE}/tasks/${TASK_ID}/links" \
+              -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -H "X-Actor: github-actions" \
+              -d "{\"kind\":\"branch\",\"ref\":\"${BRANCH}\"}" > /dev/null 2>&1 || true
+
+            # Link PR
+            curl -sf -X POST "${BASE}/tasks/${TASK_ID}/links" \
+              -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -H "X-Actor: github-actions" \
+              -d "{\"kind\":\"pr\",\"ref\":\"#${PR_NUM}\",\"url\":\"${PR_URL}\"}" > /dev/null 2>&1 || true
+
+            # Link commits
+            git log --format="%H %s" --no-merges origin/${{ github.base_ref }}..HEAD \
+              | grep "${TASK_ID}" | while read -r SHA MSG; do
+              curl -sf -X POST "${BASE}/tasks/${TASK_ID}/links" \
+                -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -H "X-Actor: github-actions" \
+                -d "{\"kind\":\"commit\",\"ref\":\"${SHA}\"}" > /dev/null 2>&1 || true
+            done
+
+            LINKED="${LINKED}${TASK_ID} "
+          done
+
+          echo "Linked tasks: ${LINKED:-none}"
+
+      - name: Post PR summary
+        if: steps.config.outputs.url != '' && github.event.action == 'opened'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PREFIX="${{ steps.config.outputs.prefix }}"
+          URL="${{ steps.config.outputs.url }}"
+          ORG="${{ steps.config.outputs.org }}"
+          PROJECT="${{ steps.config.outputs.project }}"
+
+          TASK_IDS=$(git log --format="%s" --no-merges origin/${{ github.base_ref }}..HEAD \
+            | grep -oE "${PREFIX}-[0-9]+" | sort -u)
+
+          if [[ -z "$TASK_IDS" ]]; then exit 0; fi
+
+          COMMENT="## Warrant Tasks\n\n"
+          for TASK_ID in $TASK_IDS; do
+            BOARD_URL="${URL}/tasks/${ORG}/${PROJECT}/${TASK_ID}"
+            COMMENT="${COMMENT}- [${TASK_ID}](${BOARD_URL})\n"
+          done
+          COMMENT="${COMMENT}\n_Tracked by [Warrant](${URL}/board/${ORG}/${PROJECT})_"
+
+          echo -e "$COMMENT" | gh pr comment ${{ github.event.pull_request.number }} --body-file -
+
+  mark-done:
+    name: Mark tasks done on merge
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Load warrant config
+        id: config
+        run: |
+          CONFIG=""
+          if [[ -f .warrant/config.yaml ]]; then CONFIG=".warrant/config.yaml"
+          elif [[ -f backlog/config.yaml ]]; then CONFIG="backlog/config.yaml"
+          elif [[ -f backlog/config.yml ]]; then CONFIG="backlog/config.yml"
+          fi
+          [[ -z "$CONFIG" ]] && exit 0
+
+          echo "prefix=$(grep "^prefix:" "$CONFIG" | sed 's/prefix: *//' | tr -d "'\"')" >> "$GITHUB_OUTPUT"
+          echo "url=$(grep "^  url:" "$CONFIG" | sed 's/  url: *//' | tr -d "'\"'" || true)" >> "$GITHUB_OUTPUT"
+          echo "org=$(grep "^  org:" "$CONFIG" | sed 's/  org: *//' | tr -d "'\"'" || true)" >> "$GITHUB_OUTPUT"
+          echo "project=$(grep "^  project:" "$CONFIG" | sed 's/  project: *//' | tr -d "'\"'" || true)" >> "$GITHUB_OUTPUT"
+
+      - name: Transition tasks to done
+        if: steps.config.outputs.url != ''
+        env:
+          WARRANT_TOKEN: ${{ secrets.WARRANT_TOKEN }}
+        run: |
+          PREFIX="${{ steps.config.outputs.prefix }}"
+          BASE="${{ steps.config.outputs.url }}/api/v1/orgs/${{ steps.config.outputs.org }}/projects/${{ steps.config.outputs.project }}"
+
+          TASK_IDS=$(git log --format="%s" --no-merges origin/${{ github.base_ref }}..HEAD \
+            | grep -oE "${PREFIX}-[0-9]+" | sort -u)
+
+          for TASK_ID in $TASK_IDS; do
+            RESULT=$(curl -sf -X POST "${BASE}/tasks/${TASK_ID}/status" \
+              -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -H "X-Actor: github-actions" \
+              -d '{"status":"done","expected_status":"in_review"}' 2>/dev/null || echo '{}')
+
+            if echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('data',{}).get('id')" 2>/dev/null; then
+              echo "$TASK_ID: marked done"
+            else
+              echo "$TASK_ID: could not auto-close (may not be in_review)"
+            fi
+          done
+
+  record-commits:
+    name: Record commits to hash chain
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
+
+      - name: Load warrant config
+        id: config
+        run: |
+          CONFIG=""
+          if [[ -f .warrant/config.yaml ]]; then CONFIG=".warrant/config.yaml"
+          elif [[ -f backlog/config.yaml ]]; then CONFIG="backlog/config.yaml"
+          elif [[ -f backlog/config.yml ]]; then CONFIG="backlog/config.yml"
+          fi
+          [[ -z "$CONFIG" ]] && exit 0
+
+          echo "url=$(grep "^  url:" "$CONFIG" | sed 's/  url: *//' | tr -d "'\"'" || true)" >> "$GITHUB_OUTPUT"
+          echo "org=$(grep "^  org:" "$CONFIG" | sed 's/  org: *//' | tr -d "'\"'" || true)" >> "$GITHUB_OUTPUT"
+          echo "project=$(grep "^  project:" "$CONFIG" | sed 's/  project: *//' | tr -d "'\"'" || true)" >> "$GITHUB_OUTPUT"
+
+      - name: Record push commits
+        if: steps.config.outputs.url != ''
+        env:
+          WARRANT_TOKEN: ${{ secrets.WARRANT_TOKEN }}
+        run: |
+          URL="${{ steps.config.outputs.url }}"
+          ORG="${{ steps.config.outputs.org }}"
+          PROJECT="${{ steps.config.outputs.project }}"
+
+          git log --reverse --format="%H|%P|%aI|%an|%s" ${{ github.event.before }}..${{ github.event.after }} 2>/dev/null | \
+          while IFS='|' read -r SHA PARENT TS AUTHOR SUMMARY; do
+            [[ -z "$SHA" ]] && continue
+            curl -sf -X POST "${URL}/api/ledger/record" \
+              -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"org\": \"${ORG}\",
+                \"project\": \"${PROJECT}\",
+                \"commit_sha\": \"${SHA}\",
+                \"parent_sha\": \"${PARENT%% *}\",
+                \"summary\": $(echo "$SUMMARY" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read().strip()))'),
+                \"actor\": \"${AUTHOR}\",
+                \"timestamp\": \"${TS}\"
+              }" > /dev/null 2>&1 || true
+            echo "Recorded: ${SHA:0:8} $SUMMARY"
+          done

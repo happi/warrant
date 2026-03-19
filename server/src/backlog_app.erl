@@ -9,6 +9,27 @@ start(_StartType, _StartArgs) ->
             %% Health
             {"/health", backlog_handler, #{action => health}},
 
+            %% UI routes (server-rendered HTML)
+            {"/", warrant_ui_handler, #{page => home}},
+            {"/login", warrant_ui_handler, #{page => login}},
+            {"/logout", warrant_ui_handler, #{page => logout}},
+            {"/board/:org/:project", warrant_ui_handler, #{page => board}},
+            {"/board/:org/:project/tasks", warrant_ui_handler, #{page => create_task_action}},
+            {"/tasks/:org/:project/:task_id", warrant_ui_handler, #{page => task_detail}},
+            {"/tasks/:org/:project/:task_id/status", warrant_ui_handler, #{page => task_status_action}},
+            {"/trace/:org/:project/:task_id", warrant_ui_handler, #{page => trace}},
+            {"/admin", warrant_ui_handler, #{page => admin}},
+            {"/admin/orgs/:org_slug", warrant_ui_handler, #{page => admin_org}},
+            {"/admin/orgs/:org_slug/users", warrant_ui_handler, #{page => admin_users}},
+            {"/admin/orgs/:org_slug/users/create", warrant_ui_handler, #{page => create_user_action}},
+            {"/admin/orgs/:org_slug/users/:username/token", warrant_ui_handler, #{page => regen_token_action}},
+            {"/admin/orgs/:org_slug/projects/create", warrant_ui_handler, #{page => create_project_action}},
+            {"/admin/orgs/:org_slug/projects/:project_slug", warrant_ui_handler, #{page => admin_project}},
+            {"/admin/orgs/:org_slug/projects/:project_slug/webhook", warrant_ui_handler, #{page => setup_webhook_action}},
+
+            %% GitHub webhook receiver
+            {"/webhooks/github", warrant_webhook_handler, #{}},
+
             %% Legacy endpoints (preserved)
             {"/api/backlog/tasks", backlog_handler, #{action => list}},
             {"/api/backlog/tasks/:id", backlog_handler, #{action => task}},

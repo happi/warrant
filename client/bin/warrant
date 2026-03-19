@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Warrant CLI
-# Local-first: reads/writes .warrant/tasks/*.md files in your repo.
+# Local-first: reads/writes task files in your repo.
 # Server optional: only needed for ID allocation, CAS, and leases.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,6 +15,11 @@ find_warrant_dir() {
             echo "$dir/.warrant"
             return 0
         fi
+        # Also check backlog/tasks (--backlog mode)
+        if [[ -d "$dir/backlog/tasks" && -f "$dir/backlog/config.yaml" ]]; then
+            echo "$dir/backlog"
+            return 0
+        fi
         dir="$(dirname "$dir")"
     done
     echo ""
@@ -22,17 +27,69 @@ find_warrant_dir() {
 }
 
 WARRANT_DIR="$(find_warrant_dir)" || true
-TASKS_DIR="${WARRANT_DIR:+$WARRANT_DIR/tasks}"
 
 # Load config
 load_config() {
-    # From .warrant/config.yaml
-    if [[ -f "${WARRANT_DIR}/config.yaml" ]]; then
-        WARRANT_PREFIX=$(grep "^prefix:" "${WARRANT_DIR}/config.yaml" | sed 's/prefix: *//' | tr -d "'\"")
+    local config_file=""
+    if [[ -n "${WARRANT_DIR}" ]]; then
+        if [[ -f "${WARRANT_DIR}/config.yaml" ]]; then
+            config_file="${WARRANT_DIR}/config.yaml"
+        elif [[ -f "${WARRANT_DIR}/config.yml" ]]; then
+            config_file="${WARRANT_DIR}/config.yml"
+        fi
     fi
 
-    # From .warrant/.env (overrides, has token)
-    if [[ -f "${WARRANT_DIR}/.env" ]]; then
+    if [[ -n "$config_file" ]]; then
+        WARRANT_PREFIX=$(grep "^prefix:" "$config_file" | sed 's/prefix: *//' | tr -d "'\"")
+        # Read tasks_dir
+        local td
+        td=$(grep "^tasks_dir:" "$config_file" 2>/dev/null | sed 's/tasks_dir: *//' | tr -d "'\"" || true)
+        if [[ -n "$td" ]]; then
+            # Resolve relative to repo root
+            local repo_root
+            repo_root="$(dirname "$WARRANT_DIR")"
+            if [[ "$td" == /* ]]; then
+                TASKS_DIR="$td"
+            else
+                TASKS_DIR="$repo_root/$td"
+            fi
+        fi
+
+        # Read filename_format
+        FILENAME_FORMAT=$(grep "^filename_format:" "$config_file" 2>/dev/null | sed 's/filename_format: *//' | tr -d "'\"" || true)
+
+        # Read completed_dir
+        local cd_val
+        cd_val=$(grep "^completed_dir:" "$config_file" 2>/dev/null | sed 's/completed_dir: *//' | tr -d "'\"" || true)
+        if [[ -n "$cd_val" ]]; then
+            local repo_root
+            repo_root="$(dirname "$WARRANT_DIR")"
+            if [[ "$cd_val" == /* ]]; then
+                COMPLETED_DIR="$cd_val"
+            else
+                COMPLETED_DIR="$repo_root/$cd_val"
+            fi
+        fi
+
+        # Read server config
+        local url org project token_env
+        url=$(grep "^  url:" "$config_file" 2>/dev/null | sed 's/  url: *//' | tr -d "'\"" || true)
+        org=$(grep "^  org:" "$config_file" 2>/dev/null | sed 's/  org: *//' | tr -d "'\"" || true)
+        project=$(grep "^  project:" "$config_file" 2>/dev/null | sed 's/  project: *//' | tr -d "'\"" || true)
+        token_env=$(grep "^  token_env:" "$config_file" 2>/dev/null | sed 's/  token_env: *//' | tr -d "'\"" || true)
+        if [[ -n "$url" ]]; then WARRANT_URL="${WARRANT_URL:-$url}"; fi
+        if [[ -n "$org" ]]; then WARRANT_ORG="${WARRANT_ORG:-$org}"; fi
+        if [[ -n "$project" ]]; then WARRANT_PROJECT="${WARRANT_PROJECT:-$project}"; fi
+        if [[ -n "$token_env" ]]; then
+            local resolved="${!token_env:-}"
+            if [[ -n "$resolved" ]]; then
+                WARRANT_TOKEN="${WARRANT_TOKEN:-$resolved}"
+            fi
+        fi
+    fi
+
+    # From .warrant/.env or backlog/.env (overrides, has token)
+    if [[ -n "${WARRANT_DIR}" && -f "${WARRANT_DIR}/.env" ]]; then
         source "${WARRANT_DIR}/.env"
     fi
 
@@ -42,6 +99,13 @@ load_config() {
     fi
 
     WARRANT_PREFIX="${WARRANT_PREFIX:-}"
+    FILENAME_FORMAT="${FILENAME_FORMAT:-id}"
+    COMPLETED_DIR="${COMPLETED_DIR:-}"
+
+    # Default tasks dir
+    if [[ -z "${TASKS_DIR:-}" && -n "${WARRANT_DIR}" ]]; then
+        TASKS_DIR="${WARRANT_DIR}/tasks"
+    fi
 }
 
 load_config
@@ -79,7 +143,30 @@ api_id() {
 # Local task file operations
 task_file() {
     local id="$1"
-    echo "${TASKS_DIR}/${id}.md"
+    local title="${2:-}"
+    case "$FILENAME_FORMAT" in
+        title)
+            if [[ -n "$title" ]]; then
+                local slug
+                slug=$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | head -c 60)
+                local lower_id
+                lower_id=$(echo "$id" | tr '[:upper:]' '[:lower:]')
+                echo "${TASKS_DIR}/${lower_id} - ${slug}.md"
+            else
+                # Search for existing file by ID prefix
+                local found
+                found=$(find "${TASKS_DIR}" -maxdepth 1 -name "$(echo "$id" | tr '[:upper:]' '[:lower:]')*" -o -name "${id}*" 2>/dev/null | head -1)
+                if [[ -n "$found" ]]; then
+                    echo "$found"
+                else
+                    echo "${TASKS_DIR}/${id}.md"
+                fi
+            fi
+            ;;
+        *)
+            echo "${TASKS_DIR}/${id}.md"
+            ;;
+    esac
 }
 
 read_frontmatter() {
@@ -97,7 +184,7 @@ read_section() {
 write_task_file() {
     local id="$1" title="$2" intent="$3" priority="$4" labels="$5" decision="$6"
     local file
-    file="$(task_file "$id")"
+    file="$(task_file "$id" "$title")"
     local now
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     local labels_yaml="[]"
@@ -105,6 +192,7 @@ write_task_file() {
         labels_yaml="[$(echo "$labels" | sed 's/,/, /g')]"
     fi
 
+    mkdir -p "$(dirname "$file")"
     cat > "$file" << EOF
 ---
 id: ${id}
@@ -129,6 +217,7 @@ EOF
 ${decision}
 EOF
     fi
+    echo "$file"
 }
 
 update_frontmatter() {
@@ -137,6 +226,25 @@ update_frontmatter() {
     if grep -q "^${key}:" "$file"; then
         sed -i "s/^${key}:.*/${key}: ${value}/" "$file"
     fi
+}
+
+find_task_file() {
+    local id="$1"
+    local direct
+    direct="$(task_file "$id")"
+    if [[ -f "$direct" ]]; then
+        echo "$direct"
+        return 0
+    fi
+    # Search by ID in filename
+    local found
+    found=$(find "${TASKS_DIR}" -maxdepth 1 -name "${id}*" -o -name "$(echo "$id" | tr '[:upper:]' '[:lower:]')*" 2>/dev/null | head -1)
+    if [[ -n "$found" ]]; then
+        echo "$found"
+        return 0
+    fi
+    echo "$direct"
+    return 1
 }
 
 # Commands
@@ -160,8 +268,8 @@ cmd_task() {
                 esac
             done
 
-            if [[ -z "$TASKS_DIR" ]]; then
-                echo "Error: No .warrant/tasks/ directory found. Run: mkdir -p .warrant/tasks" >&2
+            if [[ -z "${TASKS_DIR:-}" ]]; then
+                echo "Error: No tasks directory found. Run: warrant init" >&2
                 exit 1
             fi
 
@@ -175,7 +283,7 @@ cmd_task() {
                 for f in "${TASKS_DIR}"/*.md; do
                     [[ -f "$f" ]] || continue
                     local num
-                    num=$(basename "$f" .md | grep -oE '[0-9]+$' || echo 0)
+                    num=$(basename "$f" .md | grep -oE '[0-9]+' | tail -1 || echo 0)
                     if [[ "$num" -gt "$max" ]]; then max="$num"; fi
                 done
                 local next=$((max + 1))
@@ -183,8 +291,9 @@ cmd_task() {
                 task_id="${prefix}-${next}"
             fi
 
-            write_task_file "$task_id" "$title" "$intent" "$priority" "$labels" "$decision"
-            echo "Created $(task_file "$task_id")"
+            local created_file
+            created_file=$(write_task_file "$task_id" "$title" "$intent" "$priority" "$labels" "$decision")
+            echo "Created $created_file"
             echo ""
             echo "  $task_id: $title"
             echo ""
@@ -195,7 +304,7 @@ cmd_task() {
         get|view)
             local id="${1:?Usage: warrant task get TASK-ID}"
             local file
-            file="$(task_file "$id")"
+            file="$(find_task_file "$id")" || { echo "Task $id not found" >&2; exit 1; }
             if [[ ! -f "$file" ]]; then
                 echo "Task $id not found" >&2; exit 1
             fi
@@ -203,8 +312,8 @@ cmd_task() {
             ;;
 
         list)
-            if [[ -z "$TASKS_DIR" ]]; then
-                echo "No .warrant/tasks/ directory found" >&2; exit 1
+            if [[ -z "${TASKS_DIR:-}" ]]; then
+                echo "No tasks directory found" >&2; exit 1
             fi
             local filter_status="" filter_label=""
             while [[ $# -gt 0 ]]; do
@@ -234,7 +343,7 @@ cmd_task() {
         start)
             local id="${1:?Usage: warrant task start TASK-ID}"
             local file
-            file="$(task_file "$id")"
+            file="$(find_task_file "$id")" || { echo "Task $id not found" >&2; exit 1; }
             if [[ ! -f "$file" ]]; then
                 echo "Task $id not found" >&2; exit 1
             fi
@@ -253,20 +362,49 @@ cmd_task() {
 
         review)
             local id="${1:?Usage: warrant task review TASK-ID}"
-            update_frontmatter "$(task_file "$id")" "status" "in_review"
+            local file
+            file="$(find_task_file "$id")" || { echo "Task $id not found" >&2; exit 1; }
+            update_frontmatter "$file" "status" "in_review"
             echo "$id: in_progress > in_review"
             ;;
 
         done)
             local id="${1:?Usage: warrant task done TASK-ID}"
-            update_frontmatter "$(task_file "$id")" "status" "done"
+            local file
+            file="$(find_task_file "$id")" || { echo "Task $id not found" >&2; exit 1; }
+            update_frontmatter "$file" "status" "done"
             echo "$id: > done"
             ;;
 
         block)
             local id="${1:?Usage: warrant task block TASK-ID}"
-            update_frontmatter "$(task_file "$id")" "status" "blocked"
+            local file
+            file="$(find_task_file "$id")" || { echo "Task $id not found" >&2; exit 1; }
+            update_frontmatter "$file" "status" "blocked"
             echo "$id: > blocked"
+            ;;
+
+        archive)
+            local id="${1:?Usage: warrant task archive TASK-ID}"
+            if [[ -z "$COMPLETED_DIR" ]]; then
+                echo "Error: No completed_dir configured. Add 'completed_dir' to config.yaml" >&2
+                exit 1
+            fi
+            local file
+            file="$(find_task_file "$id")" || { echo "Task $id not found" >&2; exit 1; }
+            if [[ ! -f "$file" ]]; then
+                echo "Task $id not found" >&2; exit 1
+            fi
+            local status
+            status=$(read_frontmatter "$file" "status")
+            if [[ "$status" != "done" && "$status" != "cancelled" ]]; then
+                echo "Warning: Task status is '$status', not 'done' or 'cancelled'." >&2
+                read -rp "Archive anyway? [y/N] " confirm
+                if [[ ! "$confirm" =~ ^[Yy] ]]; then exit 0; fi
+            fi
+            mkdir -p "$COMPLETED_DIR"
+            mv "$file" "$COMPLETED_DIR/"
+            echo "Archived $id to $COMPLETED_DIR/$(basename "$file")"
             ;;
 
         help|*)
@@ -281,6 +419,7 @@ Commands:
   review TASK-ID         (in_progress > in_review)
   done TASK-ID           (in_review > done)
   block TASK-ID          (any > blocked)
+  archive TASK-ID        (move done/cancelled task to completed_dir)
 HELP
             ;;
     esac
@@ -289,7 +428,7 @@ HELP
 cmd_trace() {
     local id="${1:?Usage: warrant trace TASK-ID}"
     local file
-    file="$(task_file "$id")"
+    file="$(find_task_file "$id")" || { echo "Task $id not found" >&2; exit 1; }
 
     if [[ ! -f "$file" ]]; then
         echo "Task $id not found" >&2; exit 1
@@ -369,16 +508,62 @@ cmd_lease() {
 }
 
 cmd_init() {
-    mkdir -p .warrant/tasks .warrant/decisions .warrant/policies
+    local backlog_mode=false
+    local prefix=""
 
-    if [[ ! -f .warrant/config.yaml ]]; then
-        local prefix="${1:-}"
-        if [[ -z "$prefix" ]]; then
-            read -rp "Task ID prefix (e.g., W, AUR, ZIN): " prefix
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --backlog) backlog_mode=true; shift ;;
+            *) prefix="$1"; shift ;;
+        esac
+    done
+
+    if [[ "$backlog_mode" == true ]]; then
+        # Backlog mode: use backlog/ directory
+        mkdir -p backlog/tasks backlog/completed
+
+        if [[ ! -f backlog/config.yaml ]]; then
+            if [[ -z "$prefix" ]]; then
+                read -rp "Task ID prefix (e.g., W, AUR, ZIN): " prefix
+            fi
+            prefix=$(echo "$prefix" | tr '[:lower:]' '[:upper:]')
+
+            cat > backlog/config.yaml << EOF
+# Warrant configuration (backlog mode)
+prefix: ${prefix}
+tasks_dir: backlog/tasks
+completed_dir: backlog/completed
+filename_format: title
+protected_branch: main
+
+# Server (optional - enables ID allocation, CAS, leases, hash chain)
+# server:
+#   url: http://localhost:8090
+#   org: myorg
+#   project: myproject
+#   token_env: WARRANT_TOKEN
+EOF
+            echo "Created backlog/config.yaml (prefix: $prefix, backlog mode)"
         fi
-        prefix=$(echo "$prefix" | tr '[:lower:]' '[:upper:]')
 
-        cat > .warrant/config.yaml << EOF
+        echo "Warrant initialized in backlog mode."
+        echo ""
+        echo "Task files: backlog/tasks/"
+        echo "Completed:  backlog/completed/"
+        echo ""
+        echo "Create your first task:"
+        echo "  warrant task create \"First task\" --intent \"Why it matters\""
+    else
+        # Standard mode: use .warrant/ directory
+        mkdir -p .warrant/tasks .warrant/decisions .warrant/policies
+
+        if [[ ! -f .warrant/config.yaml ]]; then
+            if [[ -z "$prefix" ]]; then
+                read -rp "Task ID prefix (e.g., W, AUR, ZIN): " prefix
+            fi
+            prefix=$(echo "$prefix" | tr '[:lower:]' '[:upper:]')
+
+            cat > .warrant/config.yaml << EOF
 # Warrant configuration
 prefix: ${prefix}
 tasks_dir: .warrant/tasks
@@ -391,12 +576,65 @@ protected_branch: main
 #   project: myproject
 #   token_env: WARRANT_TOKEN
 EOF
-        echo "Created .warrant/config.yaml (prefix: $prefix)"
-    fi
+            echo "Created .warrant/config.yaml (prefix: $prefix)"
+        fi
 
-    echo "Warrant initialized. Create your first task:"
-    echo ""
-    echo "  warrant task create \"First task\" --intent \"Why it matters\""
+        echo "Warrant initialized. Create your first task:"
+        echo ""
+        echo "  warrant task create \"First task\" --intent \"Why it matters\""
+    fi
+}
+
+cmd_board() {
+    if has_server && [[ -n "${WARRANT_ORG:-}" && -n "${WARRANT_PROJECT:-}" ]]; then
+        local url="${WARRANT_URL}/board/${WARRANT_ORG}/${WARRANT_PROJECT}"
+        echo "Opening board: $url"
+        # Try to open in browser
+        if command -v xdg-open &>/dev/null; then
+            xdg-open "$url" 2>/dev/null &
+        elif command -v open &>/dev/null; then
+            open "$url" 2>/dev/null &
+        else
+            echo "Open in browser: $url"
+        fi
+    else
+        # Terminal kanban fallback
+        if [[ -z "${TASKS_DIR:-}" ]]; then
+            echo "No tasks directory found" >&2; exit 1
+        fi
+
+        local statuses=("open" "in_progress" "in_review" "done" "blocked")
+        for status in "${statuses[@]}"; do
+            local label
+            case "$status" in
+                in_progress) label="IN PROGRESS" ;;
+                in_review) label="IN REVIEW" ;;
+                *) label=$(echo "$status" | tr '[:lower:]' '[:upper:]') ;;
+            esac
+            local count=0
+            local items=""
+            for f in "${TASKS_DIR}"/*.md; do
+                [[ -f "$f" ]] || continue
+                local s
+                s=$(read_frontmatter "$f" "status")
+                if [[ "$s" == "$status" ]]; then
+                    local id title priority
+                    id=$(read_frontmatter "$f" "id")
+                    title=$(read_frontmatter "$f" "title" | tr -d '"')
+                    priority=$(read_frontmatter "$f" "priority")
+                    items+="  ${id} [${priority:-?}] ${title}\n"
+                    count=$((count + 1))
+                fi
+            done
+            echo "=== ${label} ($count) ==="
+            if [[ -n "$items" ]]; then
+                echo -e "$items"
+            else
+                echo "  (empty)"
+                echo ""
+            fi
+        done
+    fi
 }
 
 cmd_record() {
@@ -407,10 +645,14 @@ cmd_record() {
 
     # Read protected branch from config
     local protected="main"
-    if [[ -n "$WARRANT_DIR" && -f "${WARRANT_DIR}/config.yaml" ]]; then
-        local conf_branch
-        conf_branch=$(grep "^protected_branch:" "${WARRANT_DIR}/config.yaml" 2>/dev/null | sed 's/protected_branch: *//' | tr -d "'\""  || true)
-        if [[ -n "$conf_branch" ]]; then protected="$conf_branch"; fi
+    if [[ -n "${WARRANT_DIR:-}" ]]; then
+        local config_file="${WARRANT_DIR}/config.yaml"
+        [[ -f "$config_file" ]] || config_file="${WARRANT_DIR}/config.yml"
+        if [[ -f "$config_file" ]]; then
+            local conf_branch
+            conf_branch=$(grep "^protected_branch:" "$config_file" 2>/dev/null | sed 's/protected_branch: *//' | tr -d "'\"" || true)
+            if [[ -n "$conf_branch" ]]; then protected="$conf_branch"; fi
+        fi
     fi
 
     local current_branch
@@ -534,6 +776,60 @@ for e in json.load(sys.stdin).get('data',[]): print(e['commit_sha'])
     echo "  Run 'warrant record' to record any missing commits."
 }
 
+cmd_setup_github() {
+    local workflow_dir=".github/workflows"
+    local workflow_file="${workflow_dir}/warrant.yml"
+
+    if [[ -f "$workflow_file" ]]; then
+        echo "Workflow already exists at $workflow_file"
+        read -rp "Overwrite? [y/N] " confirm
+        if [[ ! "$confirm" =~ ^[Yy] ]]; then exit 0; fi
+    fi
+
+    mkdir -p "$workflow_dir"
+    cp "${SCRIPT_DIR}/../ci/warrant-check.yml" "$workflow_file"
+
+    echo "Created $workflow_file"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Add WARRANT_TOKEN secret in GitHub repo settings"
+    echo "     Settings > Secrets and variables > Actions > New repository secret"
+    echo "  2. Commit and push the workflow file"
+    echo "  3. Open a PR to test"
+}
+
+cmd_setup_webhook() {
+    if ! has_server; then
+        echo "Error: Server required. Configure WARRANT_URL in config." >&2
+        exit 1
+    fi
+
+    local repo_url=""
+    if command -v gh &>/dev/null; then
+        repo_url=$(gh repo view --json url -q '.url' 2>/dev/null || true)
+    fi
+    if [[ -z "$repo_url" ]]; then
+        read -rp "GitHub repository URL (e.g., https://github.com/org/repo): " repo_url
+    fi
+
+    local result
+    result=$(curl -s -X POST "${WARRANT_URL}/admin/orgs/${WARRANT_ORG}/projects/${WARRANT_PROJECT}/webhook" \
+        -H "Authorization: Bearer ${WARRANT_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{\"repo_url\": \"$repo_url\"}")
+
+    echo "Webhook configured."
+    echo ""
+    echo "Add this webhook in GitHub repo settings:"
+    echo "  Settings > Webhooks > Add webhook"
+    echo ""
+    echo "  Payload URL: ${WARRANT_URL}/webhooks/github"
+    echo "  Content type: application/json"
+    echo "  Events: Pull requests, Pushes"
+    echo ""
+    echo "  The webhook secret was generated. Check the server admin UI for the secret."
+}
+
 # Main dispatch
 case "${1:-help}" in
     task)    shift; cmd_task "$@" ;;
@@ -542,6 +838,9 @@ case "${1:-help}" in
     record)  shift; cmd_record "$@" ;;
     verify)  shift; cmd_verify "$@" ;;
     init)    shift; cmd_init "$@" ;;
+    board)   shift; cmd_board "$@" ;;
+    setup-github)  shift; cmd_setup_github "$@" ;;
+    setup-webhook) shift; cmd_setup_webhook "$@" ;;
     help|--help|-h)
         cat <<HELP
 Warrant CLI - every change needs a warrant.
@@ -549,20 +848,30 @@ Warrant CLI - every change needs a warrant.
 Usage: warrant <command> [args]
 
 Commands:
-  init             Initialize .warrant/ in the current repo
-  task             Create, view, list, and transition tasks
-  trace            Show full traceability for a task
-  lease            Acquire or release a task lease (requires server)
-  record [N]       Record last N commits to compliance hash chain (default: 10)
-  verify           Verify repo integrity against server hash chain
+  init [--backlog] [PREFIX]  Initialize warrant in the current repo
+  task                       Create, view, list, and transition tasks
+  trace TASK-ID              Show full traceability for a task
+  board                      Open Kanban board (browser or terminal)
+  lease                      Acquire or release a task lease (requires server)
+  record [N]                 Record last N commits to compliance hash chain (default: 10)
+  verify                     Verify repo integrity against server hash chain
+  setup-github               Install GitHub Actions workflow for PR checks
+  setup-webhook              Configure GitHub webhook on the server
+
+Options:
+  init --backlog             Use backlog/ directory (title-based filenames, completed dir)
 
 Examples:
   warrant init
+  warrant init --backlog
   warrant task create "Fix login bug" --intent "Users can't log in" --priority high
   warrant task start W-1
+  warrant task archive W-1
   warrant trace W-1
-  warrant record          # record recent commits to hash chain
-  warrant verify          # check repo matches server chain
+  warrant board
+  warrant record              # record recent commits to hash chain
+  warrant verify              # check repo matches server chain
+  warrant setup-github        # install GitHub Actions workflow
 HELP
         ;;
     *)

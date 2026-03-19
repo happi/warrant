@@ -243,5 +243,19 @@ migrations() ->
                 expires_at TEXT NOT NULL,
                 PRIMARY KEY (org, project, task_id)
             );
+        ">>},
+
+        {4, <<"
+            CREATE TABLE IF NOT EXISTS webhook_configs (
+                id TEXT PRIMARY KEY,
+                org_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT 'github',
+                repo_url TEXT,
+                webhook_secret TEXT NOT NULL,
+                access_token_encrypted TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(org_id, project_id, provider)
+            );
         ">>}
     ].
