@@ -830,6 +830,153 @@ cmd_setup_webhook() {
     echo "  The webhook secret was generated. Check the server admin UI for the secret."
 }
 
+cmd_release_notes() {
+    local since_tag="" output_file=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --since) since_tag="$2"; shift 2 ;;
+            --output|-o) output_file="$2"; shift 2 ;;
+            *) echo "Unknown option: $1" >&2; exit 1 ;;
+        esac
+    done
+
+    if [[ -z "${TASKS_DIR:-}" ]]; then
+        echo "Error: No tasks directory found. Run: warrant init" >&2
+        exit 1
+    fi
+
+    # Find the tag to diff from
+    if [[ -z "$since_tag" ]]; then
+        since_tag=$(git tag --sort=-version:refname | head -1)
+        if [[ -z "$since_tag" ]]; then
+            echo "Error: No git tags found. Use --since TAG to specify a starting point." >&2
+            exit 1
+        fi
+    fi
+
+    if ! git rev-parse "$since_tag" >/dev/null 2>&1; then
+        echo "Error: Tag '$since_tag' not found" >&2
+        exit 1
+    fi
+
+    local prefix="${WARRANT_PREFIX:-W}"
+    local tag_date
+    tag_date=$(git log -1 --format="%ai" "$since_tag" 2>/dev/null | cut -d' ' -f1)
+
+    # Collect all warrant IDs from commits since the tag
+    local -A seen_ids
+    while IFS= read -r line; do
+        # Extract task IDs (PREFIX-NNN) from commit subjects
+        while [[ "$line" =~ ${prefix}-([0-9]+) ]]; do
+            seen_ids["${prefix}-${BASH_REMATCH[1]}"]=1
+            line="${line#*${BASH_REMATCH[0]}}"
+        done
+    done < <(git log --format="%s" "${since_tag}..HEAD" 2>/dev/null)
+
+    if [[ ${#seen_ids[@]} -eq 0 ]]; then
+        echo "No warrant references found in commits since $since_tag" >&2
+        exit 0
+    fi
+
+    # Also scan completed dir
+    local all_task_dirs=("$TASKS_DIR")
+    if [[ -n "${COMPLETED_DIR:-}" && -d "$COMPLETED_DIR" ]]; then
+        all_task_dirs+=("$COMPLETED_DIR")
+    fi
+
+    # Read task data for each referenced ID
+    local -a done_tasks=()
+    local -a other_tasks=()
+    for id in "${!seen_ids[@]}"; do
+        local file=""
+        for dir in "${all_task_dirs[@]}"; do
+            # Try exact match first
+            if [[ -f "$dir/${id}.md" ]]; then
+                file="$dir/${id}.md"
+                break
+            fi
+            # Try case-insensitive / title-format search
+            local found
+            found=$(find "$dir" -maxdepth 1 \( -name "${id}*" -o -name "$(echo "$id" | tr '[:upper:]' '[:lower:]')*" \) 2>/dev/null | head -1)
+            if [[ -n "$found" ]]; then
+                file="$found"
+                break
+            fi
+        done
+
+        if [[ -z "$file" || ! -f "$file" ]]; then
+            other_tasks+=("- **${id}**: _(task file not found)_")
+            continue
+        fi
+
+        local title status priority labels intent
+        title=$(read_frontmatter "$file" "title" | tr -d '"')
+        status=$(read_frontmatter "$file" "status")
+        priority=$(read_frontmatter "$file" "priority")
+        labels=$(sed -n '/^---$/,/^---$/p' "$file" | grep "^labels:" | sed 's/^labels: *\[//;s/\] *$//' | tr -d "'" | tr -d '"')
+        intent=$(read_section "$file" "Intent" | head -1)
+
+        local entry="- **${id}**: ${title}"
+        if [[ -n "$intent" ]]; then
+            entry+=$'\n'"  _${intent}_"
+        fi
+
+        if [[ "$status" == "done" ]]; then
+            done_tasks+=("$entry")
+        else
+            other_tasks+=("${entry} _(${status})_")
+        fi
+    done
+
+    # Count commits
+    local commit_count
+    commit_count=$(git rev-list --count "${since_tag}..HEAD" 2>/dev/null)
+
+    # Build the release notes
+    local next_version
+    next_version=$(git describe --tags --always HEAD 2>/dev/null || echo "unreleased")
+
+    local notes=""
+    notes+="# Release Notes"$'\n'
+    notes+=$'\n'
+    notes+="**Since:** ${since_tag} (${tag_date})"$'\n'
+    notes+="**Commits:** ${commit_count}"$'\n'
+    notes+="**Warrants completed:** ${#done_tasks[@]}"$'\n'
+    notes+=$'\n'
+
+    if [[ ${#done_tasks[@]} -gt 0 ]]; then
+        notes+="## Completed"$'\n'
+        notes+=$'\n'
+        for entry in "${done_tasks[@]}"; do
+            notes+="${entry}"$'\n'
+        done
+        notes+=$'\n'
+    fi
+
+    if [[ ${#other_tasks[@]} -gt 0 ]]; then
+        notes+="## In Progress"$'\n'
+        notes+=$'\n'
+        for entry in "${other_tasks[@]}"; do
+            notes+="${entry}"$'\n'
+        done
+        notes+=$'\n'
+    fi
+
+    # Append commit log summary
+    notes+="## Commits"$'\n'
+    notes+=$'\n'
+    while IFS= read -r line; do
+        notes+="- ${line}"$'\n'
+    done < <(git log --format="%h %s" "${since_tag}..HEAD" 2>/dev/null)
+
+    if [[ -n "$output_file" ]]; then
+        echo "$notes" > "$output_file"
+        echo "Release notes written to $output_file"
+    else
+        echo "$notes"
+    fi
+}
+
 # Main dispatch
 case "${1:-help}" in
     task)    shift; cmd_task "$@" ;;
@@ -841,6 +988,7 @@ case "${1:-help}" in
     board)   shift; cmd_board "$@" ;;
     setup-github)  shift; cmd_setup_github "$@" ;;
     setup-webhook) shift; cmd_setup_webhook "$@" ;;
+    release-notes) shift; cmd_release_notes "$@" ;;
     help|--help|-h)
         cat <<HELP
 Warrant CLI - every change needs a warrant.
@@ -855,6 +1003,7 @@ Commands:
   lease                      Acquire or release a task lease (requires server)
   record [N]                 Record last N commits to compliance hash chain (default: 10)
   verify                     Verify repo integrity against server hash chain
+  release-notes              Generate release notes from warrants since last tag
   setup-github               Install GitHub Actions workflow for PR checks
   setup-webhook              Configure GitHub webhook on the server
 
@@ -871,6 +1020,8 @@ Examples:
   warrant board
   warrant record              # record recent commits to hash chain
   warrant verify              # check repo matches server chain
+  warrant release-notes        # release notes from warrants since last tag
+  warrant release-notes --since v0.1.0 -o RELEASE.md
   warrant setup-github        # install GitHub Actions workflow
 HELP
         ;;
