@@ -76,18 +76,19 @@ handle_event(<<"pull_request">>, Payload, OrgId, ProjectId) ->
             end;
 
         <<"closed">> when Merged =:= true ->
-            %% Auto-transition tasks to done
+            %% PR merged — create a warrant object automatically
+            create_warrant_from_pr(Payload, OrgId, ProjectId, TaskIds),
+            %% Also auto-transition tasks to done
             lists:foreach(fun(TaskId) ->
-                %% Try to move to done — go through valid transitions
                 case ledger_task_srv:get(OrgId, ProjectId, TaskId) of
                     {ok, #{status := <<"in_review">>}} ->
                         ledger_task_srv:update_status(OrgId, ProjectId, TaskId,
                             <<"done">>, <<"in_review">>);
                     _ ->
-                        ok  %% Skip if not in review
+                        ok
                 end
             end, TaskIds),
-            logger:info("PR #~p merged, tasks ~p marked done", [PRNum, TaskIds]);
+            logger:info("PR #~p merged, warrant created, tasks ~p done", [PRNum, TaskIds]);
 
         _ ->
             ok
@@ -131,6 +132,84 @@ handle_event(<<"push">>, Payload, OrgId, ProjectId) ->
 handle_event(Event, _Payload, _OrgId, _ProjectId) ->
     logger:debug("Ignoring GitHub event: ~s", [Event]),
     ok.
+
+%%% Warrant creation from PR merge
+
+create_warrant_from_pr(Payload, OrgId, ProjectId, _TaskIds) ->
+    PR = maps:get(pull_request, Payload, #{}),
+    PRNum = maps:get(number, Payload, 0),
+    Title = maps:get(title, PR, <<>>),
+    Body = maps:get(body, PR, <<>>),
+    MergeCommit = deep_get([pull_request, merge_commit_sha], Payload, null),
+    MergedBy = deep_get([pull_request, merged_by, login], Payload, <<"unknown">>),
+    MergedAt = deep_get([pull_request, merged_at], Payload, ledger_util:now_iso8601()),
+    Branch = deep_get([pull_request, head, ref], Payload, <<>>),
+    Repository = deep_get([repository, full_name], Payload, <<>>),
+    TargetBranch = deep_get([pull_request, base, ref], Payload, <<"main">>),
+    PRUrl = deep_get([pull_request, html_url], Payload, null),
+
+    %% Collect commit SHAs from the PR (GitHub sends them in the merge payload)
+    Commits = case MergeCommit of
+        null -> [];
+        MC -> [MC]
+    end,
+
+    %% Extract reviewers from requested_reviewers
+    Reviewers = [maps:get(login, R, <<>>)
+                 || R <- deep_get([pull_request, requested_reviewers], Payload, []),
+                    is_map(R)],
+
+    %% Build the merge event for warrant_merge
+    Event = #{
+        branch => Branch,
+        commits => Commits,
+        commit_messages => [Title],
+        merge_commit => MergeCommit,
+        pr_number => integer_to_binary(PRNum),
+        pr_url => PRUrl,
+        pr_title => Title,
+        pr_body => Body,
+        repository => Repository,
+        target_branch => TargetBranch,
+        actor => MergedBy,
+        reviewers => Reviewers,
+        approvals => Reviewers,  %% GitHub doesn't distinguish in webhook
+        merged_at => MergedAt
+    },
+
+    %% Extract all intent references (from branch, title, body, commit messages)
+    AllRefs = warrant_merge:extract_all_refs(Event),
+
+    %% Resolve intent sources
+    {ok, IntentSources} = warrant_merge:resolve_intents(AllRefs),
+
+    %% Build merge context
+    MergeCtx = #{
+        commits => Commits,
+        merge_commit => MergeCommit,
+        pr_number => integer_to_binary(PRNum),
+        pr_url => PRUrl,
+        pr_title => Title,
+        repository => Repository,
+        target_branch => TargetBranch,
+        actor => MergedBy,
+        reviewers => Reviewers,
+        approvals => Reviewers,
+        merged_at => MergedAt
+    },
+
+    %% Create the warrant
+    Summary = case Title of
+        <<>> -> <<"Merged PR #", (integer_to_binary(PRNum))/binary>>;
+        _ -> Title
+    end,
+    case warrant_object:create(IntentSources, MergeCtx, Summary,
+            #{org_id => OrgId, project_id => ProjectId}) of
+        {ok, #{warrant_id := WId}} ->
+            logger:info("Warrant ~s created for PR #~p (~s)", [WId, PRNum, Repository]);
+        {error, Reason} ->
+            logger:error("Failed to create warrant for PR #~p: ~p", [PRNum, Reason])
+    end.
 
 %%% Helpers
 
