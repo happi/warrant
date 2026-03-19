@@ -1,13 +1,28 @@
 {
-  "name": "vscode-warrant",
-  "displayName": "Warrant",
+  "name": "warrants",
+  "displayName": "Warrants",
   "description": "Task traceability — see why code exists, linked to tasks, PRs, and intent",
   "version": "0.3.0",
   "publisher": "happihacking",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/happi/warrant"
+  },
+  "homepage": "https://github.com/happi/warrant#readme",
+  "bugs": {
+    "url": "https://github.com/happi/warrant/issues"
+  },
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#1e293b",
+    "theme": "dark"
+  },
+  "keywords": ["traceability", "tasks", "audit", "compliance", "git", "backlog"],
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other"],
+  "categories": ["Other", "SCM Providers"],
   "activationEvents": [
     "workspaceContains:.warrant/config.yaml",
     "workspaceContains:.warrant/tasks",
