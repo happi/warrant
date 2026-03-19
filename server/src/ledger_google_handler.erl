@@ -71,12 +71,14 @@ init(Req0, #{action := callback} = State) ->
                 {ok, #{email := Email, name := Name}} ->
                     case find_or_create_google_user(Email, Name) of
                         {ok, Token} ->
-                            ledger_util:json_reply(200, #{data => #{
-                                api_token => Token,
-                                email => Email,
-                                name => Name,
-                                message => <<"Login successful. Use this token as: Authorization: Bearer <token>">>
-                            }}, Req0, State);
+                            %% Set cookie and redirect to UI
+                            Req1 = cowboy_req:set_resp_cookie(
+                                <<"warrant_token">>, Token, Req0,
+                                #{path => <<"/">>, http_only => true,
+                                  same_site => lax, max_age => 86400 * 30}),
+                            Req2 = cowboy_req:reply(302,
+                                #{<<"location">> => <<"/">>}, <<>>, Req1),
+                            {ok, Req2, State};
                         {error, Reason} ->
                             ledger_util:json_reply(500, #{error => #{
                                 code => <<"internal_error">>,
@@ -180,40 +182,48 @@ base64url_pad(B) ->
         _ -> B
     end.
 
-%% Find existing user by email in happihacking org, or create one.
+%% Find existing user by email (any org), or create in happihacking org.
 find_or_create_google_user(Email, _Name) ->
-    %% Find the happihacking org
+    %% First: check if user exists in any org
     case ledger_db:one(
-        <<"SELECT id FROM organizations WHERE slug = 'happihacking'">>,
-        []
+        <<"SELECT id, org_id, username, role FROM users WHERE email = ?1">>,
+        [Email]
     ) of
-        {ok, {OrgId}} ->
+        {ok, {_UserId, OrgId, _Username, _Role}} ->
+            %% User exists — regenerate token on each login, keep existing role
+            {RawToken, NewHash} = ledger_auth:generate_token(),
+            ok = ledger_db:exec(
+                <<"UPDATE users SET api_token_hash = ?1, auth_provider = 'google'
+                   WHERE org_id = ?2 AND email = ?3">>,
+                [NewHash, OrgId, Email]
+            ),
+            {ok, RawToken};
+        {error, not_found} ->
+            %% New user — create in happihacking org
             case ledger_db:one(
-                <<"SELECT id, api_token_hash FROM users WHERE org_id = ?1 AND email = ?2">>,
-                [OrgId, Email]
+                <<"SELECT id FROM organizations WHERE slug = 'happihacking'">>,
+                []
             ) of
-                {ok, {_UserId, _ExistingHash}} ->
-                    %% User exists — regenerate token on each login
-                    {RawToken, NewHash} = ledger_auth:generate_token(),
-                    ok = ledger_db:exec(
-                        <<"UPDATE users SET api_token_hash = ?1 WHERE org_id = ?2 AND email = ?3">>,
-                        [NewHash, OrgId, Email]
-                    ),
-                    {ok, RawToken};
-                {error, not_found} ->
-                    %% Create new user
+                {ok, {OrgId}} ->
                     UserId = ledger_util:uuid(),
                     {RawToken, TokenHash} = ledger_auth:generate_token(),
                     Now = ledger_util:now_iso8601(),
                     Username = hd(binary:split(Email, <<"@">>)),
+                    Role = default_role(Email),
                     ok = ledger_db:exec(
                         <<"INSERT INTO users (id, org_id, username, role, email, auth_provider, api_token_hash, created_at)
-                           VALUES (?1, ?2, ?3, 'developer', ?4, 'google', ?5, ?6)">>,
-                        [UserId, OrgId, Username, Email, TokenHash, Now]
+                           VALUES (?1, ?2, ?3, ?4, ?5, 'google', ?6, ?7)">>,
+                        [UserId, OrgId, Username, Role, Email, TokenHash, Now]
                     ),
-                    logger:info("ledger_google: created user ~s (~s) in happihacking", [Username, Email]),
-                    {ok, RawToken}
-            end;
-        {error, not_found} ->
-            {error, <<"happihacking org not found — run bootstrap first">>}
+                    logger:info("ledger_google: created ~s user ~s (~s) in happihacking",
+                                [Role, Username, Email]),
+                    {ok, RawToken};
+                {error, not_found} ->
+                    {error, <<"happihacking org not found — run bootstrap first">>}
+            end
     end.
+
+%% Known admin emails get admin role by default
+default_role(<<"happi@happihacking.se">>) -> <<"admin">>;
+default_role(<<"erik@stenmans.org">>) -> <<"admin">>;
+default_role(_) -> <<"developer">>.
