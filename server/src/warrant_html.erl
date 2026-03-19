@@ -16,14 +16,14 @@ page(Title, NavItems, Content) ->
 <head>
 <meta charset=\"utf-8\">
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
-<title>">>, h(Title), <<" — Warrant</title>
+<title>">>, h(Title), <<" - Warrant</title>
 <script src=\"https://unpkg.com/htmx.org@2.0.4\"></script>
 <style>">>, css(), <<"</style>
 </head>
 <body>
 <nav class=\"topnav\">
 <div class=\"nav-left\">
-<a href=\"/\" class=\"logo\">&#9632; Warrant</a>
+<a href=\"/\" class=\"logo\">Warrant</a>
 </div>
 <div class=\"nav-right\">">>,
     nav(NavItems, []),
