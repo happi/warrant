@@ -35,22 +35,35 @@ Output:
 
 ```
 AUR-1: Fix token refresh
-  Status:   done
+  Status:   in_progress
   Intent:   Users get 401 errors after sessions longer than 1 hour
-  Decision: Retry with exponential backoff. Simpler than refresh, covers more failure modes.
 
   Commits:
     abc1234 AUR-1: fix token refresh logic
-    def5678 AUR-1: add retry backoff tests
 
   Branches:
-    task/AUR-1-fix-token-refresh
+    * task/AUR-1-fix-token-refresh
 
   Audit (task file history):
-    2026-03-18 16:00  reviewer  AUR-1: mark done
-    2026-03-18 14:30  erik      AUR-1: mark in_review
-    2026-03-18 10:05  erik      AUR-1: start work
-    2026-03-18 10:00  erik      AUR-1: create task
+    2026-03-18 10:05  erik  AUR-1: fix token refresh logic
+```
+
+Or ask *why* a commit exists:
+
+```bash
+warrant why abc1234
+```
+
+```
+abc1234a AUR-1: fix token refresh logic
+  Author: erik
+  Date:   2026-03-18
+  Task:   AUR-1
+
+  AUR-1: Fix token refresh
+
+  Intent:
+    Users get 401 errors after sessions longer than 1 hour
 ```
 
 Every commit traces to a task. Every task declares intent. Every change is explainable.

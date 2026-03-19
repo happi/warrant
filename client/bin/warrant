@@ -178,7 +178,7 @@ read_frontmatter() {
 read_section() {
     local file="$1" heading="$2"
     if [[ ! -f "$file" ]]; then return 1; fi
-    sed -n "/^## ${heading}$/,/^## /p" "$file" | sed '1d;$d' | sed '/^$/d' | head -5
+    awk "/^## ${heading}\$/{found=1; next} /^## /{if(found) exit} found" "$file" | sed '/^$/d' | head -5
 }
 
 write_task_file() {
@@ -977,9 +977,120 @@ cmd_release_notes() {
     fi
 }
 
+cmd_why() {
+    local ref="${1:-HEAD}"
+
+    # Resolve to full SHA
+    local sha
+    sha=$(git rev-parse "$ref" 2>/dev/null) || {
+        echo "Error: Cannot resolve '$ref' to a commit" >&2
+        exit 1
+    }
+    local short_sha="${sha:0:8}"
+
+    # Get commit info
+    local subject author date
+    subject=$(git log --format="%s" -1 "$sha" 2>/dev/null)
+    author=$(git log --format="%an" -1 "$sha" 2>/dev/null)
+    date=$(git log --format="%ai" -1 "$sha" 2>/dev/null | cut -d' ' -f1)
+
+    # Extract task ID from commit message
+    local prefix="${WARRANT_PREFIX:-W}"
+    local task_id=""
+    if [[ "$subject" =~ (${prefix}-[0-9]+) ]]; then
+        task_id="${BASH_REMATCH[1]}"
+    fi
+
+    echo "${short_sha} ${subject}"
+    echo "  Author: ${author}"
+    echo "  Date:   ${date}"
+
+    if [[ -z "$task_id" ]]; then
+        echo ""
+        echo "  No warrant found in commit message."
+        exit 0
+    fi
+
+    echo "  Task:   ${task_id}"
+
+    # Find and read the task file
+    local file=""
+    if [[ -n "${TASKS_DIR:-}" ]]; then
+        file=$(find_task_file "$task_id" 2>/dev/null) || true
+    fi
+    # Also check completed dir
+    if [[ -z "$file" || ! -f "$file" ]] && [[ -n "${COMPLETED_DIR:-}" && -d "$COMPLETED_DIR" ]]; then
+        local found
+        found=$(find "$COMPLETED_DIR" -maxdepth 1 \( -name "${task_id}*" -o -name "$(echo "$task_id" | tr '[:upper:]' '[:lower:]')*" \) 2>/dev/null | head -1)
+        if [[ -n "$found" ]]; then file="$found"; fi
+    fi
+
+    if [[ -z "$file" || ! -f "$file" ]]; then
+        echo ""
+        echo "  Task file not found for ${task_id}."
+        exit 0
+    fi
+
+    local title status intent decision
+    title=$(read_frontmatter "$file" "title" | tr -d '"')
+    status=$(read_frontmatter "$file" "status")
+    intent=$(read_section "$file" "Intent")
+    decision=$(read_section "$file" "Decision")
+
+    echo ""
+    echo "  ${task_id}: ${title}"
+    if [[ -n "$intent" ]]; then
+        echo ""
+        echo "  Intent:"
+        while IFS= read -r line; do
+            echo "    ${line}"
+        done <<< "$intent"
+    fi
+    if [[ -n "$decision" ]]; then
+        echo ""
+        echo "  Decision:"
+        while IFS= read -r line; do
+            echo "    ${line}"
+        done <<< "$decision"
+    fi
+}
+
+cmd_check() {
+    local range="${1:-}"
+    if [[ -z "$range" ]]; then
+        local count
+        count=$(git rev-list --count HEAD 2>/dev/null || echo 0)
+        if [[ "$count" -le 20 ]]; then
+            range="HEAD"
+        else
+            range="HEAD~20..HEAD"
+        fi
+    fi
+    local prefix="${WARRANT_PREFIX:-W}"
+    local missing=0 total=0
+
+    while IFS='|' read -r sha subject; do
+        [[ -z "$sha" ]] && continue
+        total=$((total + 1))
+        if ! [[ "$subject" =~ ${prefix}-[0-9]+ ]]; then
+            echo "  MISSING  ${sha:0:8} ${subject}"
+            missing=$((missing + 1))
+        fi
+    done < <(git log --format="%H|%s" "$range" 2>/dev/null)
+
+    if [[ "$missing" -eq 0 ]]; then
+        echo "All $total commits have warrants."
+    else
+        echo ""
+        echo "$missing of $total commits missing a warrant reference."
+    fi
+}
+
 # Main dispatch
 case "${1:-help}" in
     task)    shift; cmd_task "$@" ;;
+    why)     shift; cmd_why "$@" ;;
+    check)   shift; cmd_check "$@" ;;
     trace)   shift; cmd_trace "$@" ;;
     lease)   shift; cmd_lease "$@" ;;
     record)  shift; cmd_record "$@" ;;
@@ -998,6 +1109,8 @@ Usage: warrant <command> [args]
 Commands:
   init [--backlog] [PREFIX]  Initialize warrant in the current repo
   task                       Create, view, list, and transition tasks
+  why [COMMIT]               Given a commit, show why it exists
+  check [RANGE]              Find commits missing a warrant reference
   trace TASK-ID              Show full traceability for a task
   board                      Open Kanban board (browser or terminal)
   lease                      Acquire or release a task lease (requires server)
@@ -1016,6 +1129,9 @@ Examples:
   warrant task create "Fix login bug" --intent "Users can't log in" --priority high
   warrant task start W-1
   warrant task archive W-1
+  warrant why abc123          # why does this commit exist?
+  warrant why HEAD~3          # works with any git ref
+  warrant check               # find commits without warrants
   warrant trace W-1
   warrant board
   warrant record              # record recent commits to hash chain
