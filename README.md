@@ -119,6 +119,33 @@ warrant blame config.py
 
 Every line in the repo traces to a warrant. Every warrant traces to an intent.
 
+### This repo is the demo
+
+Warrant tracks its own development. Clone it and try:
+
+```bash
+git clone https://github.com/happi/warrant.git
+cd warrant
+export PATH="$PWD/client/bin:$PATH"
+
+# Trace a real task
+warrant trace W-36
+
+# Ask why a commit exists
+warrant why HEAD
+
+# Check warrant coverage of the server code
+warrant blame server/src/
+
+# Verify the hash chain
+warrant verify
+
+# See the backlog
+warrant board
+```
+
+The `.warrant/tasks/` and `backlog/tasks/` directories contain real tasks with real intent. The git history contains real warranted merges. The hash chain on the server contains real notarized commits.
+
 ---
 
 ## Three use cases
