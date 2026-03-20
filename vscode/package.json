@@ -2,7 +2,7 @@
   "name": "warrants",
   "displayName": "Warrants",
   "description": "Task traceability — see why code exists, linked to tasks, PRs, and intent",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "happihacking",
   "license": "MIT",
   "repository": {
