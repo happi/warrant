@@ -1,10 +1,10 @@
 ---
 id: W-42
 title: Add docs directory with setup guides and audit trail walkthrough
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-03-19 18:24'
-updated_date: '2026-03-19 18:24'
+updated_date: '2026-03-19 18:27'
 labels:
   - docs
 dependencies: []

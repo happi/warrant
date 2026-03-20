@@ -1,10 +1,10 @@
 ---
 id: W-44
 title: 'Sharpen docs: pitch, canonical example, design decisions, pain moment'
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-03-19 18:35'
-updated_date: '2026-03-19 18:35'
+updated_date: '2026-03-20 11:31'
 labels:
   - docs
 dependencies: []

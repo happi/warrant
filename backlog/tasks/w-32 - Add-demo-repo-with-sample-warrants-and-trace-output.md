@@ -1,10 +1,10 @@
 ---
 id: W-32
 title: Add demo repo with sample warrants and trace output
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-03-19 14:50'
-updated_date: '2026-03-20 11:36'
+updated_date: '2026-03-20 11:46'
 labels:
   - docs
   - marketing

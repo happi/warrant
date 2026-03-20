@@ -1,10 +1,10 @@
 ---
 id: W-41
 title: Show short commit hashes and add annotation toggle
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-03-19 18:04'
-updated_date: '2026-03-19 18:04'
+updated_date: '2026-03-20 11:31'
 labels:
   - vscode
   - server
