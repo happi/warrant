@@ -27,6 +27,7 @@ find_warrant_dir() {
 }
 
 WARRANT_DIR="$(find_warrant_dir)" || true
+BACKLOG_MODE=false
 
 # Load config
 load_config() {
@@ -40,6 +41,9 @@ load_config() {
     fi
 
     if [[ -n "$config_file" ]]; then
+        if [[ "$config_file" == */backlog/config.yaml || "$config_file" == */backlog/config.yml ]]; then
+            BACKLOG_MODE=true
+        fi
         WARRANT_PREFIX=$(grep "^prefix:" "$config_file" | sed 's/prefix: *//' | tr -d "'\"")
         # Read tasks_dir
         local td
@@ -110,6 +114,32 @@ load_config() {
 
 load_config
 
+internal_to_display_status() {
+    local status="${1:-}"
+    case "$status" in
+        open) echo "To Do" ;;
+        in_progress) echo "In Progress" ;;
+        in_review) echo "In Review" ;;
+        done) echo "Done" ;;
+        blocked) echo "Blocked" ;;
+        cancelled) echo "Cancelled" ;;
+        *) echo "$status" ;;
+    esac
+}
+
+display_to_internal_status() {
+    local status="${1:-}"
+    case "$status" in
+        "To Do") echo "open" ;;
+        "In Progress") echo "in_progress" ;;
+        "In Review") echo "in_review" ;;
+        "Done") echo "done" ;;
+        "Blocked") echo "blocked" ;;
+        "Cancelled") echo "cancelled" ;;
+        *) echo "$status" ;;
+    esac
+}
+
 # Server API (optional)
 has_server() {
     [[ -n "${WARRANT_URL:-}" && -n "${WARRANT_TOKEN:-}" ]]
@@ -138,6 +168,13 @@ api_id() {
     curl -s -X POST "${WARRANT_URL}/api/id/next" \
         -H "Content-Type: application/json" \
         -d "{\"prefix\":\"${WARRANT_PREFIX}\"}"
+}
+
+api_id_sync() {
+    local value="$1"
+    curl -s -X POST "${WARRANT_URL}/api/id/sync" \
+        -H "Content-Type: application/json" \
+        -d "{\"prefix\":\"${WARRANT_PREFIX}\",\"value\":${value}}"
 }
 
 # Local task file operations
@@ -171,14 +208,35 @@ task_file() {
 
 read_frontmatter() {
     local file="$1" key="$2"
-    if [[ ! -f "$file" ]]; then return 1; fi
-    sed -n '/^---$/,/^---$/p' "$file" | grep "^${key}:" | sed "s/^${key}: *//" | tr -d "'\""
+    if [[ ! -f "$file" ]]; then
+        echo ""
+        return 0
+    fi
+    sed -n '/^---$/,/^---$/p' "$file" | grep "^${key}:" | sed "s/^${key}: *//" | tr -d "'\"" || true
 }
 
 read_section() {
     local file="$1" heading="$2"
     if [[ ! -f "$file" ]]; then return 1; fi
     awk "/^## ${heading}\$/{found=1; next} /^## /{if(found) exit} found" "$file" | sed '/^$/d' | head -5
+}
+
+local_max_task_number() {
+    local prefix="${1:-$WARRANT_PREFIX}"
+    local max=0
+    local file
+    for file in "${TASKS_DIR}"/*.md; do
+        [[ -f "$file" ]] || continue
+        local id num
+        id="$(read_frontmatter "$file" "id")"
+        [[ -z "$id" ]] && continue
+        num="$(printf '%s\n' "$id" | sed -n "s/^${prefix}-\\([0-9][0-9]*\\).*$/\\1/p" | head -1)"
+        [[ -z "$num" ]] && continue
+        if [[ "$num" -gt "$max" ]]; then
+            max="$num"
+        fi
+    done
+    echo "$max"
 }
 
 write_task_file() {
@@ -188,12 +246,50 @@ write_task_file() {
     local now
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     local labels_yaml="[]"
+    local labels_block="[]"
     if [[ -n "$labels" ]]; then
         labels_yaml="[$(echo "$labels" | sed 's/,/, /g')]"
+        labels_block=""
+        IFS=',' read -ra label_parts <<< "$labels"
+        for raw in "${label_parts[@]}"; do
+            local label
+            label="$(echo "$raw" | sed 's/^ *//;s/ *$//')"
+            [[ -z "$label" ]] && continue
+            labels_block+="  - ${label}"$'\n'
+        done
+        [[ -z "$labels_block" ]] && labels_block="[]"
     fi
 
     mkdir -p "$(dirname "$file")"
-    cat > "$file" << EOF
+    if [[ "$BACKLOG_MODE" == true ]]; then
+        local title_yaml
+        title_yaml=$(printf '%s' "$title" | sed 's/"/\\"/g')
+        local labels_section
+        if [[ "$labels_block" == "[]" ]]; then
+            labels_section="labels: []"
+        else
+            labels_section="labels:"$'\n'"${labels_block%$'\n'}"
+        fi
+        cat > "$file" << EOF
+---
+id: ${id}
+title: "${title_yaml}"
+status: To Do
+assignee: []
+created_date: '$(date -u '+%Y-%m-%d %H:%M')'
+${labels_section}
+dependencies: []
+priority: ${priority:-medium}
+---
+
+## Description
+
+<!-- SECTION:DESCRIPTION:BEGIN -->
+${intent:-No intent specified.}
+<!-- SECTION:DESCRIPTION:END -->
+EOF
+    else
+        cat > "$file" << EOF
 ---
 id: ${id}
 title: "${title}"
@@ -208,6 +304,7 @@ created_at: '${now}'
 
 ${intent:-No intent specified.}
 EOF
+    fi
 
     if [[ -n "$decision" ]]; then
         cat >> "$file" << EOF
@@ -255,6 +352,12 @@ cmd_task() {
 
     case "$subcmd" in
         create)
+            if [[ $# -eq 0 || "${1:-}" == "--help" || "${1:-}" == "-h" || "${1:-}" == "help" ]]; then
+                cat <<HELP
+Usage: warrant task create TITLE [--intent TEXT] [--priority P] [--labels l1,l2] [--decision TEXT]
+HELP
+                exit 0
+            fi
             local title="${1:?Usage: warrant task create TITLE [--intent TEXT] [--priority P] [--labels l1,l2] [--decision TEXT]}"
             shift
             local intent="" priority="" labels="" decision=""
@@ -276,6 +379,13 @@ cmd_task() {
             # Allocate ID from server if available, otherwise use local counter
             local task_id
             if has_server; then
+                if [[ "$BACKLOG_MODE" == true ]]; then
+                    local local_max
+                    local_max="$(local_max_task_number "$WARRANT_PREFIX")"
+                    if [[ "$local_max" -gt 0 ]]; then
+                        api_id_sync "$local_max" >/dev/null || true
+                    fi
+                fi
                 task_id=$(api_id | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
             else
                 # Local fallback: find highest existing number and increment
@@ -331,9 +441,15 @@ cmd_task() {
                 title=$(read_frontmatter "$f" "title" | tr -d '"')
                 status=$(read_frontmatter "$f" "status")
                 priority=$(read_frontmatter "$f" "priority")
+                [[ -z "$status" ]] && status="?"
+                [[ -z "$priority" ]] && priority="?"
 
                 # Apply filters
-                if [[ -n "$filter_status" && "$status" != "$filter_status" ]]; then continue; fi
+                if [[ -n "$filter_status" ]]; then
+                    if [[ "$(display_to_internal_status "$status")" != "$(display_to_internal_status "$filter_status")" ]]; then
+                        continue
+                    fi
+                fi
                 if [[ -n "$filter_label" ]] && ! grep -q "$filter_label" "$f"; then continue; fi
 
                 printf "%-8s %-14s %-8s %s\n" "$id" "$status" "$priority" "$title"
@@ -347,7 +463,11 @@ cmd_task() {
             if [[ ! -f "$file" ]]; then
                 echo "Task $id not found" >&2; exit 1
             fi
-            update_frontmatter "$file" "status" "in_progress"
+            if [[ "$BACKLOG_MODE" == true ]]; then
+                update_frontmatter "$file" "status" "In Progress"
+            else
+                update_frontmatter "$file" "status" "in_progress"
+            fi
 
             # Create branch from task title
             local title
@@ -364,7 +484,11 @@ cmd_task() {
             local id="${1:?Usage: warrant task review TASK-ID}"
             local file
             file="$(find_task_file "$id")" || { echo "Task $id not found" >&2; exit 1; }
-            update_frontmatter "$file" "status" "in_review"
+            if [[ "$BACKLOG_MODE" == true ]]; then
+                update_frontmatter "$file" "status" "In Review"
+            else
+                update_frontmatter "$file" "status" "in_review"
+            fi
             echo "$id: in_progress > in_review"
             ;;
 
@@ -372,7 +496,11 @@ cmd_task() {
             local id="${1:?Usage: warrant task done TASK-ID}"
             local file
             file="$(find_task_file "$id")" || { echo "Task $id not found" >&2; exit 1; }
-            update_frontmatter "$file" "status" "done"
+            if [[ "$BACKLOG_MODE" == true ]]; then
+                update_frontmatter "$file" "status" "Done"
+            else
+                update_frontmatter "$file" "status" "done"
+            fi
             echo "$id: > done"
             ;;
 
@@ -380,7 +508,11 @@ cmd_task() {
             local id="${1:?Usage: warrant task block TASK-ID}"
             local file
             file="$(find_task_file "$id")" || { echo "Task $id not found" >&2; exit 1; }
-            update_frontmatter "$file" "status" "blocked"
+            if [[ "$BACKLOG_MODE" == true ]]; then
+                update_frontmatter "$file" "status" "Blocked"
+            else
+                update_frontmatter "$file" "status" "blocked"
+            fi
             echo "$id: > blocked"
             ;;
 
@@ -397,7 +529,9 @@ cmd_task() {
             fi
             local status
             status=$(read_frontmatter "$file" "status")
-            if [[ "$status" != "done" && "$status" != "cancelled" ]]; then
+            local status_internal
+            status_internal="$(display_to_internal_status "$status")"
+            if [[ "$status_internal" != "done" && "$status_internal" != "cancelled" ]]; then
                 echo "Warning: Task status is '$status', not 'done' or 'cancelled'." >&2
                 read -rp "Archive anyway? [y/N] " confirm
                 if [[ ! "$confirm" =~ ^[Yy] ]]; then exit 0; fi
@@ -617,7 +751,7 @@ cmd_board() {
                 [[ -f "$f" ]] || continue
                 local s
                 s=$(read_frontmatter "$f" "status")
-                if [[ "$s" == "$status" ]]; then
+                if [[ "$(display_to_internal_status "$s")" == "$status" ]]; then
                     local id title priority
                     id=$(read_frontmatter "$f" "id")
                     title=$(read_frontmatter "$f" "title" | tr -d '"')
