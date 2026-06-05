@@ -102,6 +102,12 @@ load_config() {
     FILENAME_FORMAT="${FILENAME_FORMAT:-id}"
     COMPLETED_DIR="${COMPLETED_DIR:-}"
 
+    # Read dispatch_exclude list
+    DISPATCH_EXCLUDE=""
+    if [[ -n "$config_file" ]]; then
+        DISPATCH_EXCLUDE=$(grep "^dispatch_exclude:" "$config_file" 2>/dev/null | sed 's/dispatch_exclude: *\[//;s/\] *$//' | tr -d "'" | tr -d '"' || true)
+    fi
+
     # Default tasks dir
     if [[ -z "${TASKS_DIR:-}" && -n "${WARRANT_DIR}" ]]; then
         TASKS_DIR="${WARRANT_DIR}/tasks"
@@ -130,14 +136,118 @@ api() {
         "$@"
 }
 
+# Highest existing task number for WARRANT_PREFIX, scanned from local task
+# files. The local task files are the source of truth — the server only keeps
+# an ID counter and cannot see them — so this is the value the server counter
+# must never fall behind. Echoes 0 when none found.
+local_max_for_prefix() {
+    local dir="${1:-${TASKS_DIR:-${WARRANT_DIR}/tasks}}"
+    local prefix_uc
+    prefix_uc=$(echo "${WARRANT_PREFIX}" | tr '[:lower:]' '[:upper:]')
+    local max=0 f base num
+    shopt -s nullglob
+    for f in "${dir}"/${prefix_uc}-* "${dir}"/$(echo "$prefix_uc" | tr '[:upper:]' '[:lower:]')-*; do
+        [[ -f "$f" ]] || continue
+        base=$(basename "$f")
+        num=$(echo "$base" | grep -oiE "^${prefix_uc}-[0-9]+" | grep -oE '[0-9]+$' || echo 0)
+        if [[ -n "$num" && "$num" -gt "$max" ]]; then max="$num"; fi
+    done
+    shopt -u nullglob
+    echo "$max"
+}
+
+# Advance the server counter to at least $1 (monotonic — the server ignores a
+# value lower than its current counter). Best-effort; failures must not block.
+api_id_sync() {
+    local value="$1"
+    curl -s -X POST "${WARRANT_URL}/api/id/sync" \
+        -H "Content-Type: application/json" \
+        -d "{\"prefix\":\"${WARRANT_PREFIX}\",\"value\":${value}}" >/dev/null 2>&1 || true
+}
+
 api_id() {
     if ! has_server; then
         echo "Error: Server required for ID allocation. Set WARRANT_URL in .warrant/.env" >&2
         exit 1
     fi
+    # Self-heal before allocating: push the server counter up to our local max
+    # so next_id can never re-issue an ID that already exists as a task file.
+    # This is the root-cause guard for clobbered tasks (the server counter can
+    # drift behind the files after restores or out-of-band task creation).
+    local lmax
+    lmax=$(local_max_for_prefix)
+    if [[ "${lmax:-0}" -gt 0 ]]; then
+        api_id_sync "$lmax"
+    fi
     curl -s -X POST "${WARRANT_URL}/api/id/next" \
         -H "Content-Type: application/json" \
         -d "{\"prefix\":\"${WARRANT_PREFIX}\"}"
+}
+
+# Dispatch: route task to correct project based on labels
+dispatch_task() {
+    local title="$1" intent="$2" priority="$3" labels="$4" decision="$5"
+
+    # Skip if dispatch disabled (prevents recursion)
+    [[ -z "${WARRANT_NO_DISPATCH:-}" ]] || return 1
+
+    # Only dispatch if we have a projects/ directory
+    local repo_root
+    repo_root="$(dirname "${WARRANT_DIR}")"
+    local projects_dir="${repo_root}/projects"
+    [[ -d "$projects_dir" ]] || return 1
+
+    # No labels = no dispatch
+    [[ -n "$labels" ]] || return 1
+
+    # Check each label against project backlog_labels
+    local label
+    local IFS_SAVE="$IFS"
+    IFS=','
+    for label in $labels; do
+        IFS="$IFS_SAVE"
+        label=$(echo "$label" | xargs) # trim whitespace
+
+        # Skip labels in the dispatch_exclude list
+        if [[ -n "$DISPATCH_EXCLUDE" ]] && echo ",$DISPATCH_EXCLUDE," | tr -d ' ' | grep -q ",${label},"; then
+            continue
+        fi
+
+        # Search project files for matching backlog_label
+        local match
+        match=$(grep -l "^backlog_label: ${label}$" "${projects_dir}"/*.md 2>/dev/null | head -1)
+        [[ -n "$match" ]] || continue
+
+        # Read local_path from matching project file
+        local target_path
+        target_path=$(grep "^local_path:" "$match" | sed 's/local_path: *//' | tr -d "'\"")
+        [[ -n "$target_path" ]] || continue
+
+        # Expand ~
+        target_path="${target_path/#\~/$HOME}"
+
+        # Verify target has warrant config and is a different project
+        if [[ -f "${target_path}/.warrant/config.yaml" && "${target_path}" != "$repo_root" ]]; then
+            local project_name
+            project_name=$(grep "^name:" "$match" | sed 's/name: *//' | tr -d "'\"")
+            echo "Dispatching to ${project_name} (${target_path})"
+            echo ""
+
+            # Build args for recursive call
+            local args=("$title")
+            [[ -n "$intent" ]] && args+=(--intent "$intent")
+            [[ -n "$priority" ]] && args+=(--priority "$priority")
+            [[ -n "$labels" ]] && args+=(--labels "$labels")
+            [[ -n "$decision" ]] && args+=(--decision "$decision")
+
+            # Execute in target project (with dispatch disabled)
+            (cd "${target_path}" && WARRANT_NO_DISPATCH=1 warrant task create "${args[@]}")
+            return 0
+        fi
+    done
+    IFS="$IFS_SAVE"
+
+    return 1
 }
 
 # Local task file operations
@@ -193,6 +303,14 @@ write_task_file() {
     fi
 
     mkdir -p "$(dirname "$file")"
+    # Never overwrite an existing task file. If we got here with a colliding
+    # ID (e.g. a stale server counter), failing loudly is far better than
+    # silently clobbering someone else's task.
+    if [[ -e "$file" ]]; then
+        echo "Error: refusing to overwrite existing task file: $file" >&2
+        echo "  The allocated ID collides with an existing task (server counter drift?)." >&2
+        return 1
+    fi
     cat > "$file" << EOF
 ---
 id: ${id}
@@ -273,6 +391,11 @@ cmd_task() {
                 exit 1
             fi
 
+            # Try dispatching to the correct project based on labels
+            if dispatch_task "$title" "$intent" "$priority" "$labels" "$decision"; then
+                return 0
+            fi
+
             # Allocate ID from server if available, otherwise use local counter
             local task_id
             if has_server; then
@@ -291,8 +414,21 @@ cmd_task() {
                 task_id="${prefix}-${next}"
             fi
 
+            if [[ -z "${task_id:-}" ]]; then
+                echo "Error: failed to allocate a task ID from the server." >&2
+                exit 1
+            fi
+
+            # Guard: never reuse an ID that already has a task file.
+            if find_task_file "$task_id" >/dev/null 2>&1; then
+                echo "Error: allocated ID $task_id already exists — aborting to avoid overwrite." >&2
+                echo "  The server counter is behind the local task files for prefix '${WARRANT_PREFIX}'." >&2
+                echo "  Re-run; allocation now self-syncs, so a fresh ID will be issued." >&2
+                exit 1
+            fi
+
             local created_file
-            created_file=$(write_task_file "$task_id" "$title" "$intent" "$priority" "$labels" "$decision")
+            created_file=$(write_task_file "$task_id" "$title" "$intent" "$priority" "$labels" "$decision") || exit 1
             echo "Created $created_file"
             echo ""
             echo "  $task_id: $title"
@@ -1308,9 +1444,121 @@ cmd_merge() {
     echo "Done. $task_id is warranted."
 }
 
+cmd_dispatch() {
+    local dry_run=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run|-n) dry_run=true; shift ;;
+            *) echo "Unknown option: $1" >&2; exit 1 ;;
+        esac
+    done
+
+    # Must have a projects/ directory
+    local repo_root
+    repo_root="$(dirname "${WARRANT_DIR}")"
+    local projects_dir="${repo_root}/projects"
+    if [[ ! -d "$projects_dir" ]]; then
+        echo "No projects/ directory found. Dispatch requires a project registry." >&2
+        exit 1
+    fi
+
+    if [[ -z "${TASKS_DIR:-}" ]]; then
+        echo "No tasks directory found" >&2
+        exit 1
+    fi
+
+    local dispatched=0 skipped=0
+    for f in "${TASKS_DIR}"/*.md; do
+        [[ -f "$f" ]] || continue
+        local id status labels_raw
+        id=$(read_frontmatter "$f" "id")
+        status=$(read_frontmatter "$f" "status")
+
+        # Only dispatch open tasks
+        [[ "$status" == "open" ]] || continue
+
+        # Read labels from YAML list format: [label1, label2]
+        labels_raw=$(sed -n '/^---$/,/^---$/p' "$f" | grep "^labels:" | sed 's/^labels: *\[//;s/\] *$//' | tr -d "'" | tr -d '"')
+        [[ -n "$labels_raw" ]] || continue
+
+        # Check each label against project backlog_labels
+        local IFS_SAVE="$IFS"
+        IFS=','
+        local matched=false target_path="" project_name="" match_label=""
+        for label in $labels_raw; do
+            IFS="$IFS_SAVE"
+            label=$(echo "$label" | xargs)
+            [[ -n "$label" ]] || continue
+
+            # Skip labels in the dispatch_exclude list
+            if [[ -n "$DISPATCH_EXCLUDE" ]] && echo ",$DISPATCH_EXCLUDE," | tr -d ' ' | grep -q ",${label},"; then
+                continue
+            fi
+
+            local match
+            match=$(grep -l "^backlog_label: ${label}$" "${projects_dir}"/*.md 2>/dev/null | head -1 || true)
+            [[ -n "$match" ]] || continue
+
+            local tp
+            tp=$(grep "^local_path:" "$match" 2>/dev/null | sed 's/local_path: *//' | tr -d "'\"" || true)
+            [[ -n "$tp" ]] || continue
+            tp="${tp/#\~/$HOME}"
+
+            if [[ -f "${tp}/.warrant/config.yaml" && "${tp}" != "$repo_root" ]]; then
+                target_path="$tp"
+                project_name=$(grep "^name:" "$match" | sed 's/name: *//' | tr -d "'\"")
+                match_label="$label"
+                matched=true
+                break
+            fi
+        done
+        IFS="$IFS_SAVE"
+
+        [[ "$matched" == "true" ]] || { skipped=$((skipped + 1)); continue; }
+
+        local title intent priority
+        title=$(read_frontmatter "$f" "title" | tr -d '"')
+        intent=$(read_section "$f" "Intent" | head -5)
+        priority=$(read_frontmatter "$f" "priority")
+
+        if [[ "$dry_run" == "true" ]]; then
+            printf "  WOULD DISPATCH  %-8s → %s (label: %s)\n" "$id" "$project_name" "$match_label"
+            printf "                  %s\n" "$title"
+        else
+            echo "Dispatching $id → ${project_name} (label: ${match_label})"
+
+            # Create in target project
+            local args=("$title")
+            [[ -n "$intent" ]] && args+=(--intent "$intent")
+            [[ -n "$priority" ]] && args+=(--priority "$priority")
+            [[ -n "$labels_raw" ]] && args+=(--labels "$labels_raw")
+
+            if (cd "${target_path}" && WARRANT_NO_DISPATCH=1 warrant task create "${args[@]}"); then
+                # Mark original as done with a note
+                update_frontmatter "$f" "status" "done"
+                # Append dispatch note
+                echo "" >> "$f"
+                echo "## Dispatched" >> "$f"
+                echo "" >> "$f"
+                echo "Moved to ${project_name} ($(date -u +%Y-%m-%dT%H:%M:%SZ))" >> "$f"
+                echo ""
+            fi
+        fi
+        dispatched=$((dispatched + 1))
+    done
+
+    echo ""
+    if [[ "$dry_run" == "true" ]]; then
+        echo "Dry run: $dispatched task(s) would be dispatched, $skipped skipped (no match or not open)"
+    else
+        echo "Dispatched $dispatched task(s), $skipped skipped"
+    fi
+}
+
 # Main dispatch
 case "${1:-help}" in
     task)    shift; cmd_task "$@" ;;
+    dispatch) shift; cmd_dispatch "$@" ;;
     merge)   shift; cmd_merge "$@" ;;
     why)     shift; cmd_why "$@" ;;
     check)   shift; cmd_check "$@" ;;
@@ -1333,6 +1581,7 @@ Usage: warrant <command> [args]
 Commands:
   init [--backlog] [PREFIX]  Initialize warrant in the current repo
   task                       Create, view, list, and transition tasks
+  dispatch [--dry-run]       Route open tasks to correct project based on labels
   merge BRANCH               Merge branch to current with --no-ff warranted commit
   why [COMMIT]               Given a commit, show why it exists
   check [RANGE]              Find commits missing a warrant reference
