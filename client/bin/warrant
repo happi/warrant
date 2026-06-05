@@ -261,6 +261,14 @@ write_task_file() {
     fi
 
     mkdir -p "$(dirname "$file")"
+    # Never overwrite an existing task file. If we got here with a colliding
+    # ID (e.g. a stale server counter), failing loudly is far better than
+    # silently clobbering someone else's task.
+    if [[ -e "$file" ]]; then
+        echo "Error: refusing to overwrite existing task file: $file" >&2
+        echo "  The allocated ID collides with an existing task (server counter drift?)." >&2
+        return 1
+    fi
     if [[ "$BACKLOG_MODE" == true ]]; then
         local title_yaml
         title_yaml=$(printf '%s' "$title" | sed 's/"/\\"/g')
@@ -379,12 +387,15 @@ HELP
             # Allocate ID from server if available, otherwise use local counter
             local task_id
             if has_server; then
-                if [[ "$BACKLOG_MODE" == true ]]; then
-                    local local_max
-                    local_max="$(local_max_task_number "$WARRANT_PREFIX")"
-                    if [[ "$local_max" -gt 0 ]]; then
-                        api_id_sync "$local_max" >/dev/null || true
-                    fi
+                # Self-heal before allocating: push the server counter up to our
+                # local max so next_id can never re-issue an ID that already
+                # exists as a task file (the cause of clobbered tasks when the
+                # counter drifts behind the files). Applies in BOTH modes —
+                # not just backlog mode — since .warrant repos hit the same bug.
+                local local_max
+                local_max="$(local_max_task_number "$WARRANT_PREFIX")"
+                if [[ "$local_max" -gt 0 ]]; then
+                    api_id_sync "$local_max" >/dev/null || true
                 fi
                 task_id=$(api_id | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
             else
@@ -401,8 +412,20 @@ HELP
                 task_id="${prefix}-${next}"
             fi
 
+            if [[ -z "${task_id:-}" ]]; then
+                echo "Error: failed to allocate a task ID from the server." >&2
+                exit 1
+            fi
+            # Guard: never reuse an ID that already has a task file.
+            if find_task_file "$task_id" >/dev/null 2>&1; then
+                echo "Error: allocated ID $task_id already exists — aborting to avoid overwrite." >&2
+                echo "  The server counter is behind the local task files for prefix '${WARRANT_PREFIX}'." >&2
+                echo "  Re-run; allocation now self-syncs, so a fresh ID will be issued." >&2
+                exit 1
+            fi
+
             local created_file
-            created_file=$(write_task_file "$task_id" "$title" "$intent" "$priority" "$labels" "$decision")
+            created_file=$(write_task_file "$task_id" "$title" "$intent" "$priority" "$labels" "$decision") || exit 1
             echo "Created $created_file"
             echo ""
             echo "  $task_id: $title"
