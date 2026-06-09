@@ -384,22 +384,49 @@ HELP
                 exit 1
             fi
 
-            # Allocate ID from server if available, otherwise use local counter
-            local task_id
+            # Allocate ID. The server is the single source of truth for IDs.
+            # When a server is configured for this project we NEVER fall back to
+            # local max+1 numbering: a stale or token-less client computing IDs
+            # offline is exactly what drives the server counter behind reality
+            # and collides across concurrent worktrees (e.g. ABS drifted to
+            # 1308 on the server while git was already at 1418).
+            local task_id=""
             if has_server; then
-                # Self-heal before allocating: push the server counter up to our
-                # local max so next_id can never re-issue an ID that already
-                # exists as a task file (the cause of clobbered tasks when the
-                # counter drifts behind the files). Applies in BOTH modes —
-                # not just backlog mode — since .warrant repos hit the same bug.
-                local local_max
-                local_max="$(local_max_task_number "$WARRANT_PREFIX")"
-                if [[ "$local_max" -gt 0 ]]; then
-                    api_id_sync "$local_max" >/dev/null || true
+                # Pull IDs from the server (atomic, monotonic, persisted).
+                # If the server counter is behind real task files (historical
+                # off-registry IDs), self-heal once by syncing it up to our
+                # local max, then keep pulling until we get an unused ID.
+                local synced=0 attempt
+                for attempt in $(seq 1 100); do
+                    task_id=$(api_id | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+                    if [[ -z "${task_id:-}" ]]; then
+                        echo "Error: failed to allocate a task ID from the server (${WARRANT_URL:-?})." >&2
+                        exit 1
+                    fi
+                    find_task_file "$task_id" >/dev/null 2>&1 || break
+                    task_id=""
+                    if [[ "$synced" -eq 0 ]]; then
+                        local local_max
+                        local_max="$(local_max_task_number "$WARRANT_PREFIX")"
+                        [[ "$local_max" -gt 0 ]] && api_id_sync "$local_max" >/dev/null 2>&1 || true
+                        synced=1
+                    fi
+                done
+                if [[ -z "${task_id:-}" ]]; then
+                    echo "Error: server keeps issuing IDs that already exist — its counter is far behind the task files." >&2
+                    echo "  Reconcile (admin): POST ${WARRANT_URL:-<url>}/api/id/sync {\"prefix\":\"$(printf '%s' "${WARRANT_PREFIX}" | tr '[:upper:]' '[:lower:]')\",\"value\":<current max>}" >&2
+                    exit 1
                 fi
-                task_id=$(api_id | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+            elif [[ -n "${WARRANT_URL:-}" ]]; then
+                # A server is configured but unreachable / no token: fail loudly
+                # instead of silently allocating a non-authoritative local ID.
+                echo "Error: a warrant server is configured (${WARRANT_URL}) but no WARRANT_TOKEN is available," >&2
+                echo "  so a server-authoritative ID cannot be allocated. Set WARRANT_TOKEN (e.g. in" >&2
+                echo "  ${WARRANT_DIR:-.warrant}/.env or export it in your environment) and retry." >&2
+                echo "  Refusing to fall back to local numbering, which causes ID collisions across worktrees." >&2
+                exit 1
             else
-                # Local fallback: find highest existing number and increment
+                # No server configured at all — legitimate offline/serverless repo.
                 local max=0
                 for f in "${TASKS_DIR}"/*.md; do
                     [[ -f "$f" ]] || continue
