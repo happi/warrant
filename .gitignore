@@ -4,3 +4,6 @@ vscode/out/
 vscode/node_modules/
 vscode/*.vsix
 .env
+erl_crash.dump
+server/ledger.db*
+.claude/
