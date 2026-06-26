@@ -329,7 +329,16 @@ update_frontmatter() {
     local file="$1" key="$2" value="$3"
     if [[ ! -f "$file" ]]; then return 1; fi
     if grep -q "^${key}:" "$file"; then
-        sed -i "s/^${key}:.*/${key}: ${value}/" "$file"
+        # Avoid `sed -i`: GNU sed wants `-i`, BSD/macOS sed wants `-i ''`,
+        # and getting it wrong makes BSD sed parse the file path as a script
+        # ("invalid command code"). Filter to a temp file and copy the result
+        # back, which is portable and preserves the file's permissions.
+        local tmp
+        tmp="$(mktemp "${TMPDIR:-/tmp}/warrant.XXXXXX")" || return 1
+        if sed "s/^${key}:.*/${key}: ${value}/" "$file" > "$tmp"; then
+            cat "$tmp" > "$file"
+        fi
+        rm -f "$tmp"
     fi
 }
 
